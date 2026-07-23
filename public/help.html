@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyMark Help</title>
+<style>
+  :root {
+    --bg: #FAF8F5;
+    --surface: #FFFFFF;
+    --text: #2B2822;
+    --text-secondary: #6B6559;
+    --border: #E3DDD4;
+    --accent: #7A9E7E;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 0;
+  }
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 48px 32px;
+  }
+  h1 {
+    font-size: 2em;
+    font-weight: 700;
+    margin-bottom: 4px;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin-bottom: 40px;
+  }
+  h2 {
+    font-size: 1.3em;
+    font-weight: 600;
+    margin: 32px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05em;
+    font-weight: 600;
+    margin: 20px 0 6px;
+  }
+  p { margin: 8px 0; }
+  ul, ol { padding-left: 20px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.88em;
+    padding: 2px 6px;
+    background: #EEEAE4;
+    border-radius: 4px;
+    color: var(--accent);
+  }
+  pre {
+    margin: 12px 0;
+    padding: 14px 16px;
+    background: #1B1B20;
+    border-radius: var(--radius);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: #E2DDD6;
+    font-size: 13px;
+  }
+  kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 12px;
+    font-family: inherit;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--border);
+    line-height: 1.4;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+  th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border: 1px solid var(--border);
+  }
+  th {
+    background: #EEEAE4;
+    font-weight: 600;
+  }
+  .section-toggle { display: none; }
+  .lang-en, .lang-zh { display: block; }
+  .lang-zh { margin-top: 56px; padding-top: 32px; border-top: 2px solid var(--border); }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1A1A1F;
+      --surface: #222228;
+      --text: #E2DDD6;
+      --text-secondary: #99958E;
+      --border: #2A2A30;
+      --accent: #8FBA93;
+    }
+    code { background: #2A2A30; }
+    th { background: #2A2A30; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>EasyMark Help</h1>
+<p class="subtitle">AI-powered Markdown note application / AI 驱动的 Markdown 笔记应用</p>
+
+<!-- ==================== English ==================== -->
+<div class="lang-en">
+
+<h2>Getting Started</h2>
+<p>EasyMark is a local-first Markdown note app with AI assistance. Notes are saved as <code>.md</code> files in your Documents/EasyMark folder.</p>
+
+<h3>Creating a Note</h3>
+<p>Click <kbd>New Note</kbd> in the sidebar or press <kbd>Ctrl+N</kbd>. Type a title and press Enter.</p>
+
+<h3>Saving</h3>
+<p>Notes auto-save as you type. You can also press <kbd>Ctrl+S</kbd> to manually save.</p>
+
+<h2>Markdown Editing</h2>
+<p>The editor works like Typora — it renders Markdown formatting inline as you type.</p>
+
+<h3>Keyboard Shortcuts</h3>
+<table>
+  <tr><th>Shortcut</th><th>Action</th></tr>
+  <tr><td><kbd>Ctrl+B</kbd></td><td>Bold</td></tr>
+  <tr><td><kbd>Ctrl+I</kbd></td><td>Italic</td></tr>
+  <tr><td><kbd>Ctrl+U</kbd></td><td>Underline</td></tr>
+  <tr><td><kbd>Ctrl+K</kbd></td><td>Insert link</td></tr>
+  <tr><td><kbd>Ctrl+1</kbd> ~ <kbd>Ctrl+6</kbd></td><td>Heading 1–6</td></tr>
+  <tr><td><kbd>Ctrl+Shift+C</kbd></td><td>Code block</td></tr>
+  <tr><td><kbd>Ctrl+Shift+`</kbd></td><td>Inline code</td></tr>
+  <tr><td><kbd>Ctrl+F</kbd></td><td>Search & replace</td></tr>
+  <tr><td><kbd>Ctrl+/</kbd></td><td>Toggle preview</td></tr>
+  <tr><td><kbd>Ctrl+S</kbd></td><td>Save</td></tr>
+  <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd></td><td>Undo / Redo</td></tr>
+  <tr><td><kbd>Tab</kbd></td><td>Indent (4 spaces)</td></tr>
+</table>
+
+<h3>Markdown Syntax</h3>
+<table>
+  <tr><th>Syntax</th><th>Result</th></tr>
+  <tr><td><code># Heading</code></td><td>Heading 1</td></tr>
+  <tr><td><code>## Heading</code></td><td>Heading 2</td></tr>
+  <tr><td><code>**bold**</code></td><td><strong>bold</strong></td></tr>
+  <tr><td><code>*italic*</code></td><td><em>italic</em></td></tr>
+  <tr><td><code>`code`</code></td><td>Inline code</td></tr>
+  <tr><td><code>```python\n...\n```</code></td><td>Fenced code block with syntax highlighting</td></tr>
+  <tr><td><code>[text](url)</code></td><td>Link</td></tr>
+  <tr><td><code>- item</code></td><td>Bullet list</td></tr>
+  <tr><td><code>1. item</code></td><td>Numbered list</td></tr>
+  <tr><td><code>> quote</code></td><td>Blockquote</td></tr>
+  <tr><td><code>---</code></td><td>Horizontal rule</td></tr>
+  <tr><td><code>| col1 | col2 |</code></td><td>Table</td></tr>
+</table>
+
+<h2>AI Assistant</h2>
+<p>Click the <strong>person icon</strong> in the title bar to open the AI panel. Before using AI, go to <strong>Settings → AI</strong> and enter your API key.</p>
+<ul>
+  <li><strong>Write tab</strong>: Get suggestions or completions for selected text</li>
+  <li><strong>Chat tab</strong>: Chat with AI about your note</li>
+</ul>
+<p>You can also click <strong>Refresh</strong> in Settings → AI to fetch available models from your API.</p>
+
+<h2>Search & Replace</h2>
+<p>Press <kbd>Ctrl+F</kbd> to open the search bar. Use <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> to navigate matches. Click <kbd>Replace</kbd> or <kbd>All</kbd> to replace text.</p>
+
+<h2>Images</h2>
+<p>Paste an image from your clipboard directly into the editor. Images are saved to the <code>assets/</code> folder next to your notes.</p>
+
+<h2>Outline</h2>
+<p>Click the <strong>list icon</strong> in the editor toolbar to open the outline panel. Click any heading to jump to that section.</p>
+
+<h2>Settings</h2>
+<p>Click the <strong>gear icon</strong> in the title bar to open settings:</p>
+<ul>
+  <li><strong>Appearance</strong>: Theme (light/dark), color scheme (Forest/Ocean/Terracotta/Monochrome), language</li>
+  <li><strong>AI</strong>: API key, base URL, model selection with refresh</li>
+  <li><strong>About</strong>: Version info</li>
+</ul>
+
+</div>
+
+<!-- ==================== Chinese ==================== -->
+<div class="lang-zh">
+
+<h2>快速开始</h2>
+<p>EasyMark 是一款本地优先的 AI Markdown 笔记应用。笔记以 <code>.md</code> 文件保存在 <code>Documents/EasyMark/</code> 目录下。</p>
+
+<h3>新建笔记</h3>
+<p>点击侧边栏的「新建笔记」按钮或按 <kbd>Ctrl+N</kbd>。输入标题后按回车确认。</p>
+
+<h3>保存</h3>
+<p>笔记自动保存。也可以按 <kbd>Ctrl+S</kbd> 手动保存。</p>
+
+<h2>Markdown 编辑</h2>
+<p>编辑器像 Typora 一样实时渲染 Markdown 格式。</p>
+
+<h3>快捷键</h3>
+<table>
+  <tr><th>快捷键</th><th>功能</th></tr>
+  <tr><td><kbd>Ctrl+B</kbd></td><td>加粗</td></tr>
+  <tr><td><kbd>Ctrl+I</kbd></td><td>斜体</td></tr>
+  <tr><td><kbd>Ctrl+U</kbd></td><td>下划线</td></tr>
+  <tr><td><kbd>Ctrl+K</kbd></td><td>插入链接</td></tr>
+  <tr><td><kbd>Ctrl+1</kbd> ~ <kbd>Ctrl+6</kbd></td><td>标题 1~6</td></tr>
+  <tr><td><kbd>Ctrl+Shift+C</kbd></td><td>代码块</td></tr>
+  <tr><td><kbd>Ctrl+Shift+\`</kbd></td><td>行内代码</td></tr>
+  <tr><td><kbd>Ctrl+F</kbd></td><td>搜索替换</td></tr>
+  <tr><td><kbd>Ctrl+/</kbd></td><td>切换预览</td></tr>
+  <tr><td><kbd>Ctrl+S</kbd></td><td>保存</td></tr>
+  <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd></td><td>撤销 / 重做</td></tr>
+  <tr><td><kbd>Tab</kbd></td><td>缩进（4 空格）</td></tr>
+</table>
+
+<h3>Markdown 语法</h3>
+<table>
+  <tr><th>语法</th><th>效果</th></tr>
+  <tr><td><code># 标题</code></td><td>一级标题</td></tr>
+  <tr><td><code>## 标题</code></td><td>二级标题</td></tr>
+  <tr><td><code>**加粗**</code></td><td><strong>加粗</strong></td></tr>
+  <tr><td><code>*斜体*</code></td><td><em>斜体</em></td></tr>
+  <tr><td><code>\`代码\`</code></td><td>行内代码</td></tr>
+  <tr><td><code>\`\`\`python\n...\n\`\`\`</code></td><td>带语法高亮的代码块</td></tr>
+  <tr><td><code>[文字](链接)</code></td><td>链接</td></tr>
+  <tr><td><code>- 项目</code></td><td>无序列表</td></tr>
+  <tr><td><code>1. 项目</code></td><td>有序列表</td></tr>
+  <tr><td><code>> 引用</code></td><td>引用块</td></tr>
+  <tr><td><code>---</code></td><td>分隔线</td></tr>
+  <tr><td><code>| 列1 | 列2 |</code></td><td>表格</td></tr>
+</table>
+
+<h2>AI 助手</h2>
+<p>点击标题栏的「人物图标」打开 AI 面板。首次使用需在「设置 → AI」中输入 API Key。</p>
+<ul>
+  <li><strong>写作</strong>：对选中文本获取建议或补全</li>
+  <li><strong>对话</strong>：与 AI 讨论你的笔记内容</li>
+</ul>
+<p>在「设置 → AI」中点击「刷新」可从 API 拉取可用模型列表。</p>
+
+<h2>搜索替换</h2>
+<p>按 <kbd>Ctrl+F</kbd> 打开搜索栏。<kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> 上下导航。点击「替换」或「全部」进行替换。</p>
+
+<h2>图片</h2>
+<p>直接从剪贴板粘贴图片到编辑器中。图片自动保存到笔记同目录的 <code>assets/</code> 文件夹。</p>
+
+<h2>大纲</h2>
+<p>点击编辑器工具栏的「列表图标」展开大纲面板。点击标题跳转到对应位置。</p>
+
+<h2>设置</h2>
+<p>点击标题栏的「齿轮图标」打开设置：</p>
+<ul>
+  <li><strong>外观</strong>：主题（亮/暗）、配色（森林/海洋/陶土/黑白）、语言</li>
+  <li><strong>AI</strong>：API Key、地址、模型选择（支持刷新）</li>
+  <li><strong>关于</strong>：版本信息</li>
+</ul>
+
+</div>
+
+</div>
+
+</body>
+</html>

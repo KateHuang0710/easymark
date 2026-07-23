@@ -1,0 +1,101 @@
+{
+  "name": "easymark",
+  "version": "1.0.0",
+  "description": "Cross-platform AI-powered Markdown note application",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:5173 concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && node --test tests/*.test.cjs",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "start": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "pack:mac": "npm run build && electron-builder --mac --dir",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist": "npm run build && electron-builder",
+    "dist:mac:universal": "npm run build && electron-builder --mac --universal"
+  },
+  "build": {
+    "appId": "com.easymark.app",
+    "productName": "EasyMark",
+    "asar": true,
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "minimumSystemVersion": "12.0",
+      "notarize": true,
+      "extendInfo": {
+        "NSHumanReadableCopyright": "Copyright © 2026 EasyMark contributors"
+      }
+    },
+    "dmg": {
+      "sign": false
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "EasyMark"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon-512x512.png",
+      "category": "Office"
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^6.0.4",
+    "concurrently": "^8.2.0",
+    "cross-env": "^10.0.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "@types/turndown": "^5.0.4",
+    "docx": "^9.7.1",
+    "dompurify": "^3.4.12",
+    "highlight.js": "^11.11.1",
+    "marked": "^12.0.2",
+    "openai": "^4.104.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "turndown": "^7.2.4"
+  },
+  "author": "EasyMark contributors"
+}

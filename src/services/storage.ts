@@ -1,0 +1,10 @@
+import { NoteSummary } from '../types'
+
+const api = () => window.electronAPI
+
+export const listNotes = (): Promise<NoteSummary[]> => api().listNotes()
+export const readNote = (filename: string): Promise<string | null> => api().readNote(filename)
+export const saveNote = (filename: string, content: string): Promise<boolean> => api().saveNote(filename, content)
+export const createNote = (title: string): Promise<{ filename: string; title: string; content: string }> => api().createNote(title)
+export const deleteNote = (filename: string): Promise<boolean> => api().deleteNote(filename)
+export const renameNote = (oldFilename: string, newTitle: string): Promise<{ filename: string; title: string }> => api().renameNote(oldFilename, newTitle)

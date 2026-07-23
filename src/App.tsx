@@ -1,0 +1,312 @@
+import React, { useState, useCallback, useEffect, useRef } from 'react'
+import { I18nProvider, useTranslation } from './i18n'
+import { SettingsProvider, useSettings } from './contexts/SettingsContext'
+import { TitleBar } from './components/TitleBar'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { Sidebar } from './components/Sidebar'
+import { MarkdownEditor } from './components/Editor/MarkdownEditor'
+import { AIAssistant } from './components/AIAssistant'
+import { SettingsDialog } from './components/SettingsDialog'
+import { ReadingMode } from './components/Editor/ReadingMode'
+import { ExportDialog } from './components/Editor/ExportDialog'
+import { SearchPanel } from './components/Editor/SearchPanel'
+import { useNotes } from './hooks/useNotes'
+import { Note } from './types'
+import * as storage from './services/storage'
+
+function AppContent() {
+  const { t } = useTranslation()
+  const { settings, setTheme, setDualPane } = useSettings()
+  const {
+    notes,
+    currentNote,
+    allNotes,
+    searchQuery,
+    setSearchQuery,
+    openNote,
+    createNote,
+    deleteNote,
+    saveCurrentNote,
+    autoSave,
+    renameNote,
+    setCurrentNote,
+    flushAutoSave,
+  } = useNotes()
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [aiVisible, setAIVisible] = useState(false)
+  const [settingsVisible, setSettingsVisible] = useState(false)
+  const [readingModeActive, setReadingModeActive] = useState(false)
+  const [exportVisible, setExportVisible] = useState(false)
+  const [searchAllVisible, setSearchAllVisible] = useState(false)
+  const [secondNote, setSecondNote] = useState<Note | null>(null)
+  const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const secondPendingRef = useRef<{ filename: string; content: string } | null>(null)
+  const secondOpenRequestRef = useRef(0)
+
+  const flushSecondSave = useCallback(async () => {
+    if (secondSaveTimerRef.current) {
+      clearTimeout(secondSaveTimerRef.current)
+      secondSaveTimerRef.current = undefined
+    }
+    const pending = secondPendingRef.current
+    if (!pending) return
+    secondPendingRef.current = null
+    try {
+      await storage.saveNote(pending.filename, pending.content)
+    } catch (error) {
+      if (!secondPendingRef.current) secondPendingRef.current = pending
+      console.error('Second pane auto-save failed:', error)
+      throw error
+    }
+  }, [])
+
+  useEffect(() => () => {
+    if (secondSaveTimerRef.current) clearTimeout(secondSaveTimerRef.current)
+    const pending = secondPendingRef.current
+    if (pending) void storage.saveNote(pending.filename, pending.content).catch(error => console.error('Final second pane save failed:', error))
+  }, [])
+
+  useEffect(() => window.electronAPI.onBeforeClose(() => {
+    void Promise.all([flushAutoSave(), flushSecondSave()])
+      .then(() => window.electronAPI.confirmClose())
+      .catch(error => {
+        console.error('Could not close EasyMark because saving failed:', error)
+        window.electronAPI.cancelClose()
+      })
+  }), [flushAutoSave, flushSecondSave])
+
+  const handleContentChange = useCallback((content: string) => {
+    if (!currentNote) return
+    setCurrentNote(prev => prev ? { ...prev, content } : null)
+    if (secondNote?.filename === currentNote.filename) {
+      setSecondNote(prev => prev ? { ...prev, content } : null)
+    }
+    autoSave(content)
+  }, [currentNote, secondNote?.filename, autoSave, setCurrentNote])
+
+  const handleSecondContentChange = useCallback((content: string) => {
+    setSecondNote(prev => prev ? { ...prev, content } : null)
+    if (!secondNote) return
+    if (currentNote?.filename === secondNote.filename) {
+      setCurrentNote(prev => prev ? { ...prev, content } : null)
+      autoSave(content)
+      return
+    }
+    secondPendingRef.current = { filename: secondNote.filename, content }
+    if (secondSaveTimerRef.current) clearTimeout(secondSaveTimerRef.current)
+    secondSaveTimerRef.current = setTimeout(() => {
+      secondSaveTimerRef.current = undefined
+      void flushSecondSave().catch(error => console.error('Scheduled second pane save failed:', error))
+    }, 750)
+  }, [secondNote, currentNote?.filename, autoSave, flushSecondSave, setCurrentNote])
+
+  const handleSave = useCallback(async (content: string) => {
+    await saveCurrentNote(content)
+  }, [saveCurrentNote])
+
+  const handleSecondSave = useCallback(async (content: string) => {
+    if (!secondNote) return
+    if (currentNote?.filename === secondNote.filename) {
+      await flushAutoSave()
+      return
+    }
+    secondPendingRef.current = { filename: secondNote.filename, content }
+    await flushSecondSave()
+  }, [secondNote, currentNote?.filename, flushAutoSave, flushSecondSave])
+
+  const handleSplitRight = useCallback(() => {
+    if (!settings.dualPane && currentNote) {
+      // Use in-memory content (currentNote.content) which is always up-to-date,
+      // not disk content which may be stale due to auto-save debounce (1s).
+      setSecondNote({ ...currentNote })
+      setDualPane(true)
+    }
+  }, [settings.dualPane, currentNote, setDualPane])
+
+  const handleDeleteNote = useCallback(async (filename: string) => {
+    await flushSecondSave()
+    await deleteNote(filename)
+    if (secondNote?.filename === filename) {
+      setSecondNote(null)
+    }
+  }, [deleteNote, flushSecondSave, secondNote])
+
+  const handleRenameNote = useCallback(async (oldFilename: string, newTitle: string) => {
+    await flushSecondSave()
+    const result = await renameNote(oldFilename, newTitle)
+    if (secondNote?.filename === oldFilename) {
+      setSecondNote(prev => prev ? { ...prev, id: result.filename.slice(0, -3), filename: result.filename, title: result.title } : null)
+    }
+    return result
+  }, [flushSecondSave, renameNote, secondNote])
+
+  const handleClosePane = useCallback(() => {
+    void flushSecondSave().then(() => {
+      setDualPane(false)
+      setSecondNote(null)
+    }).catch(error => console.error('Could not close second pane because saving failed:', error))
+  }, [flushSecondSave, setDualPane])
+
+  const handleSecondNoteSelect = useCallback(async (filename: string) => {
+    const requestId = ++secondOpenRequestRef.current
+    await flushSecondSave()
+    if (requestId !== secondOpenRequestRef.current) return
+    const summary = allNotes.find(note => note.filename === filename)
+    if (!summary) return
+    if (currentNote?.filename === filename) {
+      setSecondNote({ ...currentNote })
+      return
+    }
+    const content = await storage.readNote(filename)
+    if (requestId !== secondOpenRequestRef.current) return
+    if (content !== null) setSecondNote({ ...summary, content })
+  }, [allNotes, currentNote, flushSecondSave])
+
+  const handleOpenNoteFromSearch = useCallback(async (filename: string) => {
+    const note = allNotes.find(n => n.filename === filename)
+    if (note) {
+      await openNote(note)
+    }
+    setSearchAllVisible(false)
+  }, [allNotes, openNote])
+
+  const handleReadingMode = useCallback(() => {
+    if (currentNote) {
+      setReadingModeActive(true)
+    }
+  }, [currentNote])
+
+  return (
+    <div className={`app platform-${window.electronAPI.platform} theme-${settings.theme} scheme-${settings.colorScheme}`}>
+      <TitleBar
+        onToggleTheme={() => setTheme(settings.theme === 'dark' ? 'light' : 'dark')}
+        onOpenSettings={() => { setExportVisible(false); setSettingsVisible(true) }}
+        onToggleAI={() => setAIVisible(prev => !prev)}
+      />
+      <div className="app-body">
+        <Sidebar
+          notes={notes}
+          currentNote={currentNote}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onNoteSelect={note => { void openNote(note).catch(error => console.error('Failed to open note:', error)) }}
+          onNoteCreate={async title => { await createNote(title) }}
+          onNoteDelete={async filename => { await handleDeleteNote(filename) }}
+          onNoteRename={async (filename, title) => { await handleRenameNote(filename, title) }}
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed(prev => !prev)}
+        />
+        <main className="app-main">
+          {readingModeActive && currentNote ? (
+            <ReadingMode
+              content={currentNote.content}
+              title={currentNote.title}
+              onClose={() => setReadingModeActive(false)}
+              onEdit={() => setReadingModeActive(false)}
+            />
+          ) : settings.dualPane && currentNote && secondNote ? (
+            <div className="dual-pane">
+              <div className="dual-pane-panel">
+                <div className="dual-pane-header">
+                  <span className="dual-pane-title">{currentNote.title}</span>
+                  <button className="dual-pane-close" onClick={handleClosePane} title={t.editor.closePane}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+                <MarkdownEditor
+                  content={currentNote.content}
+                  onChange={handleContentChange}
+                  onSave={handleSave}
+                  dualPaneMode={true}
+                />
+              </div>
+              <div className="dual-pane-divider" />
+              <div className="dual-pane-panel">
+                <div className="dual-pane-header">
+                  <select
+                    className="dual-pane-select"
+                    value={secondNote.filename}
+                    onChange={e => { void handleSecondNoteSelect(e.target.value).catch(error => console.error('Failed to open second pane note:', error)) }}
+                  >
+                    {allNotes.map(n => (
+                      <option key={n.filename} value={n.filename}>{n.title}</option>
+                    ))}
+                  </select>
+                </div>
+                <MarkdownEditor
+                  content={secondNote.content}
+                  onChange={handleSecondContentChange}
+                  onSave={handleSecondSave}
+                  dualPaneMode={true}
+                />
+              </div>
+            </div>
+          ) : currentNote ? (
+            <MarkdownEditor
+              content={currentNote.content}
+              onChange={handleContentChange}
+              onSave={handleSave}
+              onSplitRight={handleSplitRight}
+              onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
+              onSearchAll={() => setSearchAllVisible(true)}
+              onReadingMode={handleReadingMode}
+            />
+          ) : (
+            <div className="app-welcome">
+              <div className="app-welcome-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  <path d="M8 7h8M8 11h6M8 15h4" />
+                </svg>
+              </div>
+              <h1>{t.welcome.title}</h1>
+              <p>{t.welcome.subtitle}</p>
+              <button className="app-welcome-btn" onClick={() => { void createNote().catch(error => console.error('Failed to create note:', error)) }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                {t.welcome.newNote}
+              </button>
+            </div>
+          )}
+          <SearchPanel
+            visible={searchAllVisible}
+            onClose={() => setSearchAllVisible(false)}
+            onOpenNote={filename => { void handleOpenNoteFromSearch(filename).catch(error => console.error('Failed to open search result:', error)) }}
+          />
+        </main>
+        <AIAssistant
+          visible={aiVisible}
+          onClose={() => setAIVisible(false)}
+          noteContent={currentNote?.content || ''}
+        />
+        <SettingsDialog
+          visible={settingsVisible}
+          onClose={() => setSettingsVisible(false)}
+        />
+        {currentNote && (
+          <ExportDialog
+            visible={exportVisible}
+            onClose={() => setExportVisible(false)}
+            content={currentNote.content}
+            title={currentNote.title}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function App() {
+  return (
+    <I18nProvider>
+      <SettingsProvider>
+        <ErrorBoundary><AppContent /></ErrorBoundary>
+      </SettingsProvider>
+    </I18nProvider>
+  )
+}
