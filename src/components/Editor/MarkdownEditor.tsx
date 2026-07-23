@@ -105,6 +105,20 @@ function selectionIsInside(root: HTMLElement | null, range?: Range): boolean {
   return Boolean(activeRange && (activeRange.commonAncestorContainer === root || root.contains(activeRange.commonAncestorContainer)))
 }
 
+export function applyBlockFormat(root: HTMLElement | null, tagName: string): boolean {
+  if (!root || !/^(?:p|blockquote|pre|h[1-6])$/.test(tagName)) return false
+  const selection = window.getSelection()
+  if (!selection?.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return false
+
+  const savedRange = range.cloneRange()
+  root.focus()
+  selection.removeAllRanges()
+  selection.addRange(savedRange)
+  return document.execCommand('formatBlock', false, tagName)
+}
+
 function insertTextAtCursor(text: string) {
   const sel = window.getSelection()
   if (!sel || !sel.rangeCount) return
@@ -229,25 +243,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   }
 
   function execFormatBlock(tagName: string): boolean {
-    const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return false
-    const node = sel.anchorNode
-    if (!node) return false
-    const block = node.nodeType === Node.ELEMENT_NODE
-      ? (node as HTMLElement).closest('p,li,h1,h2,h3,h4,h5,h6,div')
-      : node.parentElement?.closest('p,li,h1,h2,h3,h4,h5,h6,div')
-    if (block) {
-      const wrapper = document.createElement(tagName)
-      wrapper.innerHTML = block.innerHTML
-      block.parentNode?.replaceChild(wrapper, block)
-      const newRange = document.createRange()
-      newRange.selectNodeContents(wrapper)
-      newRange.collapse(false)
-      sel.removeAllRanges()
-      sel.addRange(newRange)
-      return true
-    }
-    return false
+    return applyBlockFormat(editorRef.current, tagName)
   }
 
   function execList(type: 'ul' | 'ol'): boolean {
@@ -319,9 +315,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         break
       case 'undo':
         document.execCommand('undo')
+        emitChange()
         return
       case 'redo':
         document.execCommand('redo')
+        emitChange()
         return
       default:
         // Fallback for unsupported commands
@@ -451,30 +449,8 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   }, [onSave])
 
   const insertBlock = useCallback((tag: string) => {
-    if (['h4', 'h5', 'h6'].includes(tag) && editorRef.current) {
-      // h4-h6 use manual DOM manipulation
-      const sel = window.getSelection()
-      if (!sel || !sel.rangeCount) return
-      const node = sel.anchorNode
-      if (!node || !selectionIsInside(editorRef.current, sel.getRangeAt(0))) return
-      const block = node.nodeType === Node.ELEMENT_NODE
-        ? (node as HTMLElement).closest('p,li,h1,h2,h3,h4,h5,h6,div')
-        : node.parentElement?.closest('p,li,h1,h2,h3,h4,h5,h6,div')
-      if (block) {
-        const heading = document.createElement(tag)
-        heading.innerHTML = block.innerHTML
-        block.parentNode?.replaceChild(heading, block)
-        const range = document.createRange()
-        range.selectNodeContents(heading)
-        range.collapse(false)
-        sel.removeAllRanges()
-        sel.addRange(range)
-        emitChange()
-      }
-    } else {
-      execFormat('formatBlock', `<${tag}>`)
-    }
-  }, [execFormat, emitChange, editorRef])
+    execFormat('formatBlock', `<${tag}>`)
+  }, [execFormat])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -513,7 +489,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           }
           return
         case 'z':
-          e.preventDefault(); document.execCommand(e.shiftKey ? 'redo' : 'undo'); return
+          e.preventDefault(); document.execCommand(e.shiftKey ? 'redo' : 'undo'); emitChange(); return
         case '1': case '2': case '3': case '4': case '5': case '6':
           e.preventDefault()
           const hLevel = parseInt(e.key)
