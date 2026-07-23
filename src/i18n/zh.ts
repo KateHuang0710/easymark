@@ -24,6 +24,11 @@ export const zh: TranslationKeys = {
     noteTitle: '笔记标题...',
     noteCount: '{count} 条笔记',
     noteCountPlural: '{count} 条笔记',
+    loading: '正在加载笔记...',
+    loadFailed: '无法读取笔记列表',
+    retry: '重试',
+    historyDeletionFailed: '笔记已删除，但其版本历史文件未能从磁盘中清理。',
+    historyMigrationFailed: '笔记已重命名，但部分版本历史未能迁移；历史数据没有被删除，但可能分散在重命名前后的记录中。',
   },
   editor: {
     bold: '加粗 (Ctrl+B)',

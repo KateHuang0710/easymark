@@ -28,6 +28,8 @@ function AppContent() {
     currentNote,
     saveStatus,
     allNotes,
+    loading,
+    listError,
     searchQuery,
     setSearchQuery,
     openNote,
@@ -40,6 +42,7 @@ function AppContent() {
     setCurrentNote,
     replaceCurrentNoteContent,
     flushAutoSave,
+    refreshList,
   } = useNotes()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -151,11 +154,12 @@ function AppContent() {
   const handleDeleteNote = useCallback(async (filename: string) => {
     secondOpenRequestRef.current += 1
     await flushSecondSave()
-    await deleteNote(filename)
+    const result = await deleteNote(filename)
     if (secondNote?.filename === filename) {
       setSecondNote(null)
       setSecondSaveStatus({ state: 'idle' })
     }
+    return result
   }, [deleteNote, flushSecondSave, secondNote])
 
   const handlePrimaryNoteSelect = useCallback(async (note: NoteSummary) => {
@@ -260,8 +264,11 @@ function AppContent() {
           onSearchChange={setSearchQuery}
           onNoteSelect={note => { void handlePrimaryNoteSelect(note).catch(error => console.error('Failed to open note:', error)) }}
           onNoteCreate={async title => { await handleCreateNote(title) }}
-          onNoteDelete={async filename => { await handleDeleteNote(filename) }}
-          onNoteRename={async (filename, title) => { await handleRenameNote(filename, title) }}
+          onNoteDelete={filename => handleDeleteNote(filename)}
+          onNoteRename={(filename, title) => handleRenameNote(filename, title)}
+          loading={loading}
+          loadError={listError}
+          onRetryLoad={refreshList}
           collapsed={sidebarCollapsed}
           onToggle={() => setSidebarCollapsed(prev => !prev)}
         />

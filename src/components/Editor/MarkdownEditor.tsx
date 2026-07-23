@@ -105,6 +105,19 @@ function selectionIsInside(root: HTMLElement | null, range?: Range): boolean {
   return Boolean(activeRange && (activeRange.commonAncestorContainer === root || root.contains(activeRange.commonAncestorContainer)))
 }
 
+export function addDeferredDocumentMouseDownListener(handler: (event: MouseEvent) => void): () => void {
+  let active = true
+  const timer = window.setTimeout(() => {
+    if (!active) return
+    document.addEventListener('mousedown', handler)
+  }, 0)
+  return () => {
+    active = false
+    window.clearTimeout(timer)
+    document.removeEventListener('mousedown', handler)
+  }
+}
+
 export function applyBlockFormat(root: HTMLElement | null, tagName: string): boolean {
   if (!root || !/^(?:p|blockquote|pre|h[1-6])$/.test(tagName)) return false
   const selection = window.getSelection()
@@ -184,8 +197,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         setLangFilter('')
       }
     }
-    setTimeout(() => document.addEventListener('mousedown', handler), 0)
-    return () => document.removeEventListener('mousedown', handler)
+    return addDeferredDocumentMouseDownListener(handler)
   }, [showLangPicker])
 
   const inlineAiEnabled = isConfigured() && settings.aiInlineCompletion

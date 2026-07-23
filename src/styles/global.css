@@ -446,6 +446,24 @@ input, textarea, button {
   padding: 4px 8px;
 }
 
+.sidebar-load-error {
+  margin: 14px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-load-error strong,
+.sidebar-load-error span {
+  display: block;
+  margin-bottom: 8px;
+}
+
 .sidebar-empty {
   display: flex;
   flex-direction: column;

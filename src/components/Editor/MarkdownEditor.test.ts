@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyBlockFormat } from './MarkdownEditor'
+import { addDeferredDocumentMouseDownListener, applyBlockFormat } from './MarkdownEditor'
 
 describe('applyBlockFormat', () => {
   afterEach(() => {
@@ -44,5 +44,37 @@ describe('applyBlockFormat', () => {
     Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => true) })
 
     expect(applyBlockFormat(editor, 'h1')).toBe(false)
+  })
+})
+
+
+describe('addDeferredDocumentMouseDownListener', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('does not register the listener after cleanup runs before the timer', () => {
+    vi.useFakeTimers()
+    const add = vi.spyOn(document, 'addEventListener')
+    const handler = vi.fn()
+
+    const cleanup = addDeferredDocumentMouseDownListener(handler)
+    cleanup()
+    vi.runAllTimers()
+
+    expect(add).not.toHaveBeenCalledWith('mousedown', handler)
+  })
+
+  it('removes a listener that was already registered', () => {
+    vi.useFakeTimers()
+    const remove = vi.spyOn(document, 'removeEventListener')
+    const handler = vi.fn()
+
+    const cleanup = addDeferredDocumentMouseDownListener(handler)
+    vi.runAllTimers()
+    cleanup()
+
+    expect(remove).toHaveBeenCalledWith('mousedown', handler)
   })
 })

@@ -20,6 +20,11 @@ export const en = {
     noteTitle: 'Note title...',
     noteCount: '{count} note',
     noteCountPlural: '{count} notes',
+    loading: 'Loading notes...',
+    loadFailed: 'Could not load notes',
+    retry: 'Retry',
+    historyDeletionFailed: 'The note was deleted, but its version-history files could not be removed from disk.',
+    historyMigrationFailed: 'The note was renamed, but some version history could not be moved. The history data was not deleted, but it may be split between the old and new names.',
   },
   editor: {
     bold: 'Bold (Ctrl+B)',

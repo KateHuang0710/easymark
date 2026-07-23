@@ -16,6 +16,17 @@ export interface NoteVersion {
   size: number
 }
 
+export interface DeleteNoteResult {
+  deleted: boolean
+  historyDeletionFailed?: boolean
+}
+
+export interface RenameNoteResult {
+  filename: string
+  title: string
+  historyMigrationFailed?: boolean
+}
+
 export interface SaveStatus {
   state: 'idle' | 'saving' | 'saved' | 'error'
   error?: string
@@ -56,8 +67,8 @@ export interface ElectronAPI {
   readNoteVersion: (filename: string, versionId: string) => Promise<string>
   restoreNoteVersion: (filename: string, versionId: string) => Promise<string>
   createNote: (title: string) => Promise<{ filename: string; title: string; content: string }>
-  deleteNote: (filename: string) => Promise<boolean>
-  renameNote: (oldFilename: string, newTitle: string) => Promise<{ filename: string; title: string }>
+  deleteNote: (filename: string) => Promise<DeleteNoteResult>
+  renameNote: (oldFilename: string, newTitle: string) => Promise<RenameNoteResult>
   saveImage: (dataUrl: string) => Promise<{ filename: string }>
   openHelp: () => Promise<void>
   onMaximizedChanged: (callback: (maximized: boolean) => void) => (() => void)

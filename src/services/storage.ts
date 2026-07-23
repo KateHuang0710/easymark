@@ -1,4 +1,4 @@
-import { NoteSummary, NoteVersion } from '../types'
+import { DeleteNoteResult, NoteSummary, NoteVersion, RenameNoteResult } from '../types'
 
 const api = () => window.electronAPI
 
@@ -9,5 +9,5 @@ export const listNoteVersions = (filename: string): Promise<NoteVersion[]> => ap
 export const readNoteVersion = (filename: string, versionId: string): Promise<string> => api().readNoteVersion(filename, versionId)
 export const restoreNoteVersion = (filename: string, versionId: string): Promise<string> => api().restoreNoteVersion(filename, versionId)
 export const createNote = (title: string): Promise<{ filename: string; title: string; content: string }> => api().createNote(title)
-export const deleteNote = (filename: string): Promise<boolean> => api().deleteNote(filename)
-export const renameNote = (oldFilename: string, newTitle: string): Promise<{ filename: string; title: string }> => api().renameNote(oldFilename, newTitle)
+export const deleteNote = (filename: string): Promise<DeleteNoteResult> => api().deleteNote(filename)
+export const renameNote = (oldFilename: string, newTitle: string): Promise<RenameNoteResult> => api().renameNote(oldFilename, newTitle)

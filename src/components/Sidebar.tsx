@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Note, NoteSummary } from '../types'
+import { DeleteNoteResult, Note, NoteSummary, RenameNoteResult } from '../types'
 import { useTranslation } from '../i18n'
 
 interface SidebarProps {
@@ -9,8 +9,11 @@ interface SidebarProps {
   onSearchChange: (query: string) => void
   onNoteSelect: (note: NoteSummary) => void
   onNoteCreate: (title?: string) => void | Promise<unknown>
-  onNoteDelete: (filename: string) => void | Promise<unknown>
-  onNoteRename: (oldFilename: string, newTitle: string) => void | Promise<unknown>
+  onNoteDelete: (filename: string) => void | DeleteNoteResult | Promise<void | DeleteNoteResult>
+  onNoteRename: (oldFilename: string, newTitle: string) => void | RenameNoteResult | Promise<void | RenameNoteResult>
+  loading: boolean
+  loadError: string
+  onRetryLoad: () => void | Promise<unknown>
   collapsed: boolean
   onToggle: () => void
 }
@@ -24,6 +27,9 @@ export function Sidebar({
   onNoteCreate,
   onNoteDelete,
   onNoteRename,
+  loading,
+  loadError,
+  onRetryLoad,
   collapsed,
   onToggle,
 }: SidebarProps) {
@@ -71,8 +77,11 @@ export function Sidebar({
     setOperationPending(true)
     setOperationError('')
     try {
-      await onNoteRename(note.filename, title)
+      const result = await onNoteRename(note.filename, title)
       setRenamingId(null)
+      if (result?.historyMigrationFailed) {
+        setOperationError(t.sidebar.historyMigrationFailed)
+      }
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -146,7 +155,21 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-list">
-        {notes.length === 0 && (
+        {loadError ? (
+          <div className="sidebar-load-error" role="alert">
+            <strong>{t.sidebar.loadFailed}</strong>
+            <span>{loadError}</span>
+            <button
+              className="sidebar-empty-btn"
+              onClick={() => { void Promise.resolve(onRetryLoad()).catch(() => {}) }}
+              disabled={loading}
+            >
+              {loading ? t.sidebar.loading : t.sidebar.retry}
+            </button>
+          </div>
+        ) : loading && notes.length === 0 ? (
+          <div className="sidebar-empty"><p>{t.sidebar.loading}</p></div>
+        ) : notes.length === 0 && (
           <div className="sidebar-empty">
             <p>{t.sidebar.noNotes}</p>
             <button className="sidebar-empty-btn" onClick={handleCreate}>{t.sidebar.createFirst}</button>
@@ -216,7 +239,9 @@ export function Sidebar({
                 e.stopPropagation()
                 if (!window.confirm(`${t.sidebar.deleteNote}: ${note.title}?`)) return
                 setOperationError('')
-                void Promise.resolve(onNoteDelete(note.filename)).catch(error => {
+                void Promise.resolve(onNoteDelete(note.filename)).then(result => {
+                  if (result?.historyDeletionFailed) setOperationError(t.sidebar.historyDeletionFailed)
+                }).catch(error => {
                   setOperationError(error instanceof Error ? error.message : String(error))
                 })
               }}

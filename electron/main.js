@@ -18,6 +18,7 @@ const {
   readVersion,
 } = require('./note-history')
 const { isHorizontalRule, parseInlineRuns, parseTableCells } = require('./docx-utils')
+const { ensureRegularDirectory } = require('./safe-directory')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -132,7 +133,8 @@ function redactedAIError(error) {
 }
 
 async function ensureNotesDir() {
-  await fs.promises.mkdir(assetsDir, { recursive: true })
+  await ensureRegularDirectory(notesDir, 'notes directory')
+  await ensureRegularDirectory(assetsDir, 'assets directory')
 }
 
 // All mutations use one queue so autosave, rename, and delete cannot interleave.
@@ -358,6 +360,7 @@ app.whenReady().then(async () => {
 
   protocol.handle('easymark-asset', async request => {
     try {
+      await ensureNotesDir()
       const url = new URL(request.url)
       if (url.hostname !== 'local') return new Response('Not found', { status: 404 })
       const filename = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
@@ -446,31 +449,30 @@ ipcMain.on('app-close-cancelled', event => {
 
 ipcMain.handle('notes:list', async event => {
   assertTrustedSender(event)
-  try {
-    await ensureNotesDir()
-    const entries = await fs.promises.readdir(notesDir, { withFileTypes: true })
-    const notes = await Promise.all(entries
-      .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
-      .map(async entry => {
-        try {
-          const filePath = resolveNotePath(notesDir, entry.name)
-          const { handle, stat } = await openRegularNote(filePath)
-          await handle.close()
-          const title = entry.name.slice(0, -3)
-          return { id: title, title, filename: entry.name, lastModified: stat.mtimeMs }
-        } catch {
-          return null
-        }
-      }))
-    return notes.filter(Boolean).sort((a, b) => b.lastModified - a.lastModified)
-  } catch (err) {
-    console.error('Failed to list notes:', err)
-    return []
-  }
+  await ensureNotesDir()
+  const entries = await fs.promises.readdir(notesDir, { withFileTypes: true })
+  const notes = await Promise.all(entries
+    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
+    .map(async entry => {
+      try {
+        const filePath = resolveNotePath(notesDir, entry.name)
+        const { handle, stat } = await openRegularNote(filePath)
+        await handle.close()
+        const title = entry.name.slice(0, -3)
+        return { id: title, title, filename: entry.name, lastModified: stat.mtimeMs }
+      } catch (error) {
+        // A note may disappear between readdir and open. Other failures must be
+        // surfaced so the UI never misrepresents unreadable notes as an empty list.
+        if (error?.code === 'ENOENT') return null
+        throw error
+      }
+    }))
+  return notes.filter(Boolean).sort((a, b) => b.lastModified - a.lastModified)
 })
 
 ipcMain.handle('notes:read', async (event, filename) => {
   assertTrustedSender(event)
+  await ensureNotesDir()
   const filePath = resolveNotePath(notesDir, filename)
   try {
     return await readRegularNote(filePath)
@@ -496,12 +498,14 @@ ipcMain.handle('notes:save', async (event, filename, content) => {
 
 ipcMain.handle('notes:listVersions', async (event, filename) => {
   assertTrustedSender(event)
+  await ensureNotesDir()
   resolveNotePath(notesDir, filename)
   return withNoteMutationLock(() => listVersions(historyDir, filename, MAX_NOTE_BYTES))
 })
 
 ipcMain.handle('notes:readVersion', async (event, filename, versionId) => {
   assertTrustedSender(event)
+  await ensureNotesDir()
   resolveNotePath(notesDir, filename)
   return withNoteMutationLock(() => readVersion(historyDir, filename, versionId, MAX_NOTE_BYTES))
 })
@@ -544,16 +548,24 @@ ipcMain.handle('notes:create', async (event, title) => {
 
 ipcMain.handle('notes:delete', async (event, filename) => {
   assertTrustedSender(event)
+  await ensureNotesDir()
   const filePath = resolveNotePath(notesDir, filename)
   return withNoteMutationLock(async () => {
     try {
       const stat = await fs.promises.lstat(filePath)
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid note file')
-      await deleteHistory(historyDir, filename)
+      // Remove the note first. If unlink fails, its recoverable history must remain intact.
       await fs.promises.unlink(filePath)
-      return true
+      let historyDeletionFailed = false
+      try {
+        await deleteHistory(historyDir, filename)
+      } catch (error) {
+        historyDeletionFailed = true
+        console.error('Failed to delete note history:', error)
+      }
+      return { deleted: true, historyDeletionFailed }
     } catch (err) {
-      if (err?.code === 'ENOENT') return false
+      if (err?.code === 'ENOENT') return { deleted: false }
       throw err
     }
   })
@@ -561,16 +573,22 @@ ipcMain.handle('notes:delete', async (event, filename) => {
 
 ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
   assertTrustedSender(event)
+  await ensureNotesDir()
   const oldPath = resolveNotePath(notesDir, oldFilename)
   const safeTitle = sanitizeTitle(newTitle)
   if (`${safeTitle}.md` === oldFilename) return { filename: oldFilename, title: safeTitle }
 
   return withNoteMutationLock(async () => {
     const { handle: sourceHandle } = await openRegularNote(oldPath)
+    let content
     try {
-      const content = await sourceHandle.readFile()
-      let counter = 0
-      while (true) {
+      content = await sourceHandle.readFile()
+    } finally {
+      await sourceHandle.close()
+    }
+
+    let counter = 0
+    while (true) {
       const suffix = counter ? `-${counter}` : ''
       const newFilename = `${safeTitle}${suffix}.md`
       const newPath = resolveNotePath(notesDir, newFilename)
@@ -587,9 +605,14 @@ ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
           await fs.promises.unlink(newPath).catch(() => {})
           throw error
         }
-        await migrateHistory(historyDir, oldFilename, newFilename, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
-          .catch(error => console.error('Failed to migrate note history:', error))
-        return { filename: newFilename, title: newFilename.slice(0, -3) }
+        let historyMigrationFailed = false
+        try {
+          await migrateHistory(historyDir, oldFilename, newFilename, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+        } catch (error) {
+          historyMigrationFailed = true
+          console.error('Failed to migrate note history:', error)
+        }
+        return { filename: newFilename, title: newFilename.slice(0, -3), historyMigrationFailed }
       } catch (error) {
         if (targetHandle) await targetHandle.close().catch(() => {})
         if (error?.code === 'EEXIST') {
@@ -599,9 +622,6 @@ ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
         await fs.promises.unlink(newPath).catch(() => {})
         throw error
       }
-      }
-    } finally {
-      await sourceHandle.close()
     }
   })
 })
