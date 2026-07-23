@@ -75,6 +75,7 @@ export function useNotes() {
   }, [flushAutoSave])
 
   const createNote = useCallback(async (title?: string) => {
+    const requestId = ++openRequestRef.current
     await flushAutoSave()
     const result = await storage.createNote(title || 'untitled')
     const note: Note = {
@@ -84,16 +85,19 @@ export function useNotes() {
       lastModified: Date.now(),
       content: result.content,
     }
-    setCurrentNote(note)
-    setSaveStatus(savedStatus())
+    if (requestId === openRequestRef.current) {
+      setCurrentNote(note)
+      setSaveStatus(savedStatus())
+    }
     await refreshList()
     return note
   }, [flushAutoSave, refreshList])
 
   const deleteNote = useCallback(async (filename: string) => {
+    const requestId = ++openRequestRef.current
     await flushAutoSave()
     await storage.deleteNote(filename)
-    if (currentNoteRef.current?.filename === filename) {
+    if (requestId === openRequestRef.current && currentNoteRef.current?.filename === filename) {
       setCurrentNote(null)
       setSaveStatus({ state: 'idle' })
     }
@@ -142,9 +146,10 @@ export function useNotes() {
   }, [])
 
   const renameNote = useCallback(async (oldFilename: string, newTitle: string) => {
+    const requestId = ++openRequestRef.current
     await flushAutoSave()
     const result = await storage.renameNote(oldFilename, newTitle)
-    if (currentNoteRef.current?.filename === oldFilename) {
+    if (requestId === openRequestRef.current && currentNoteRef.current?.filename === oldFilename) {
       setCurrentNote(prev => prev ? {
         ...prev,
         id: result.filename.slice(0, -3),

@@ -29,6 +29,7 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
     if (!q.trim()) {
       setResults([])
       setActiveIndex(-1)
+      setSearching(false)
       return
     }
     setSearching(true)
@@ -55,6 +56,14 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
   useEffect(() => {
     return () => { requestRef.current += 1; if (timerRef.current) clearTimeout(timerRef.current) }
   }, [])
+
+  useEffect(() => {
+    if (!visible) {
+      requestRef.current += 1
+      if (timerRef.current) clearTimeout(timerRef.current)
+      setSearching(false)
+    }
+  }, [visible])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {

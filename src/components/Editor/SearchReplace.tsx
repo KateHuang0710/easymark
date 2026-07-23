@@ -11,6 +11,69 @@ interface SearchReplaceProps {
 
 const STORAGE_KEY = 'easymark-search-last'
 
+export function countOccurrences(text: string, query: string): number {
+  if (!query) return 0
+  let count = 0
+  let index = text.indexOf(query)
+  while (index !== -1) {
+    count += 1
+    index = text.indexOf(query, index + query.length)
+  }
+  return count
+}
+
+export function createTextRange(root: HTMLElement, start: number, length: number): Range | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let traversed = 0
+  let startNode: Node | null = null
+  let startOffset = 0
+  let endNode: Node | null = null
+  let endOffset = 0
+  const end = start + length
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode
+    const nodeLength = node.textContent?.length || 0
+    const nodeEnd = traversed + nodeLength
+    if (!startNode && start < nodeEnd) {
+      startNode = node
+      startOffset = start - traversed
+    }
+    if (startNode && end <= nodeEnd) {
+      endNode = node
+      endOffset = end - traversed
+      break
+    }
+    traversed = nodeEnd
+  }
+
+  if (!startNode || !endNode) return null
+  const range = document.createRange()
+  range.setStart(startNode, startOffset)
+  range.setEnd(endNode, endOffset)
+  return range
+}
+
+export function findMatchIndex(
+  text: string,
+  query: string,
+  start: number,
+  direction: 1 | -1,
+  selectionMatches = false,
+): number {
+  if (!query) return -1
+  const lower = text.toLowerCase()
+  const q = query.toLowerCase()
+  const found = direction === 1
+    ? lower.indexOf(q, start + (selectionMatches ? query.length : 0))
+    : start <= 0 ? -1 : lower.lastIndexOf(q, start - 1)
+  return found !== -1
+    ? found
+    : direction === 1
+      ? lower.indexOf(q)
+      : lower.lastIndexOf(q)
+}
+
 export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClose }: SearchReplaceProps) {
   const { t } = useTranslation()
   const [search, setSearch] = useState(() => {
@@ -20,7 +83,6 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
   const [matchCount, setMatchCount] = useState(0)
   const [currentIdx, setCurrentIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const contentRef = useRef('')
 
   useEffect(() => {
     if (visible) {
@@ -30,17 +92,17 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
   }, [visible, search])
 
   useEffect(() => {
-    if (!editorRef.current) return
-    const text = editorRef.current.textContent || ''
-    contentRef.current = text
-    if (!search) { setMatchCount(0); return }
-    const lower = text.toLowerCase()
-    const q = search.toLowerCase()
-    let count = 0
-    let idx = lower.indexOf(q)
-    while (idx !== -1) { count++; idx = lower.indexOf(q, idx + q.length) }
-    setMatchCount(count)
-    setCurrentIdx(prev => count > 0 ? Math.min(prev || 1, count) : 0)
+    const editor = editorRef.current
+    if (!editor) return
+    const updateCount = () => {
+      const count = countOccurrences((editor.textContent || '').toLowerCase(), search.toLowerCase())
+      setMatchCount(count)
+      setCurrentIdx(prev => count > 0 ? Math.min(prev || 1, count) : 0)
+    }
+    updateCount()
+    const observer = new MutationObserver(updateCount)
+    observer.observe(editor, { childList: true, characterData: true, subtree: true })
+    return () => observer.disconnect()
   }, [editorRef, search])
 
   const findNext = useCallback((dir: 1 | -1 = 1) => {
@@ -51,39 +113,33 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
     const sel = window.getSelection()
     let start = 0
     if (sel && sel.rangeCount && sel.anchorNode && el.contains(sel.anchorNode)) {
+      const activeRange = sel.getRangeAt(0)
       const pre = document.createRange()
       pre.selectNodeContents(el)
-      pre.setEnd(sel.anchorNode, sel.anchorOffset)
+      pre.setEnd(activeRange.startContainer, activeRange.startOffset)
       start = pre.toString().length
     }
-    const idx = text.toLowerCase().indexOf(q, start + (dir === -1 ? -search.length : 0))
-    const foundIdx = idx !== -1 ? idx : text.toLowerCase().indexOf(q)
+    const selectionMatches = sel?.toString().toLowerCase() === q
+    const foundIdx = findMatchIndex(text, search, start, dir, selectionMatches)
     if (foundIdx !== -1) {
-      setCurrentIdx(prev => {
-        if (dir === 1) return Math.min(prev + 1, matchCount)
-        return Math.max(prev - 1, 1)
-      })
-      const range = document.createRange()
-      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
-      let charCount = 0
-      while (walk.nextNode()) {
-        const len = (walk.currentNode.textContent || '').length
-        if (charCount + len > foundIdx) {
-          const offset = foundIdx - charCount
-          range.setStart(walk.currentNode, offset)
-          range.setEnd(walk.currentNode, offset + q.length)
-          sel?.removeAllRanges()
-          sel?.addRange(range)
-          try {
-            const r = range.getBoundingClientRect()
-            if (r) el.scrollTop += r.top - el.clientHeight / 3
-          } catch {}
-          break
-        }
-        charCount += len
+      const range = createTextRange(el, foundIdx, search.length)
+      if (!range) return
+      let ordinal = 1
+      const lower = text.toLowerCase()
+      let occurrence = lower.indexOf(q)
+      while (occurrence !== -1 && occurrence < foundIdx) {
+        ordinal += 1
+        occurrence = lower.indexOf(q, occurrence + q.length)
       }
+      setCurrentIdx(ordinal)
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+      try {
+        const r = range.getBoundingClientRect()
+        if (r) el.scrollTop += r.top - el.clientHeight / 3
+      } catch {}
     }
-  }, [search, editorRef, matchCount])
+  }, [search, editorRef])
 
   const syncMarkdown = useCallback(() => {
     if (!editorRef.current) return
@@ -132,6 +188,8 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { onClose(); return }
       if (e.key === 'Enter') {
+        const target = e.target
+        if (!(target instanceof HTMLInputElement) || !target.closest('.search-bar')) return
         e.preventDefault()
         findNext(e.shiftKey ? -1 : 1)
       }

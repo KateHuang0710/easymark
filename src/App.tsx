@@ -139,6 +139,7 @@ function AppContent() {
 
   const handleSplitRight = useCallback(() => {
     if (!settings.dualPane && currentNote) {
+      secondOpenRequestRef.current += 1
       // Use in-memory content (currentNote.content) which is always up-to-date,
       // not disk content which may be stale due to auto-save debounce (1s).
       setSecondNote({ ...currentNote })
@@ -148,6 +149,7 @@ function AppContent() {
   }, [settings.dualPane, currentNote, saveStatus, setDualPane])
 
   const handleDeleteNote = useCallback(async (filename: string) => {
+    secondOpenRequestRef.current += 1
     await flushSecondSave()
     await deleteNote(filename)
     if (secondNote?.filename === filename) {
@@ -162,11 +164,13 @@ function AppContent() {
   }, [flushSecondSave, openNote])
 
   const handleCreateNote = useCallback(async (title?: string) => {
+    secondOpenRequestRef.current += 1
     await flushSecondSave()
     return createNote(title)
   }, [flushSecondSave, createNote])
 
   const handleRenameNote = useCallback(async (oldFilename: string, newTitle: string) => {
+    secondOpenRequestRef.current += 1
     await flushSecondSave()
     const result = await renameNote(oldFilename, newTitle)
     if (secondNote?.filename === oldFilename) {
@@ -176,6 +180,7 @@ function AppContent() {
   }, [flushSecondSave, renameNote, secondNote])
 
   const handleClosePane = useCallback(() => {
+    secondOpenRequestRef.current += 1
     void flushSecondSave().then(() => {
       setDualPane(false)
       setSecondNote(null)

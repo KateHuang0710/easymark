@@ -17,6 +17,7 @@ const {
   migrateHistory,
   readVersion,
 } = require('./note-history')
+const { isHorizontalRule, parseInlineRuns, parseTableCells } = require('./docx-utils')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -531,7 +532,7 @@ ipcMain.handle('notes:create', async (event, title) => {
       try {
         const handle = await fs.promises.open(filePath, 'wx', 0o600)
         await handle.close()
-        return { filename, title: safeTitle, content: '' }
+        return { filename, title: filename.slice(0, -3), content: '' }
       } catch (err) {
         if (err?.code !== 'EEXIST') throw err
         filename = `${safeTitle}-${counter}.md`
@@ -774,39 +775,8 @@ ipcMain.handle('export:pdf', async (event, html, title) => {
 })
 
 // IPC: Export DOCX
-function parseInlineContent(text) {
-  const runs = []
-  const inlineRegex = /(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))|(!\[([^\]]*)\]\(([^)]+)\))|(\*\*(.+?)\*\*)|(\*(.+?)\*)|(~~(.+?)~~)/g
-  let lastIndex = 0
-  let match
-
-  while ((match = inlineRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      runs.push(new TextRun({ text: text.slice(lastIndex, match.index) }))
-    }
-
-    if (match[1]) {
-      runs.push(new TextRun({ text: match[1].slice(1, -1), font: 'Courier New', size: 18, color: 'E91E63' }))
-    } else if (match[2]) {
-      runs.push(new TextRun({ text: match[3], style: 'Hyperlink', color: '1976D2', underline: { type: 'single' } }))
-    } else if (match[6]) {
-      runs.push(new TextRun({ text: `[${match[6] || 'image'}]`, italics: true, color: '999999' }))
-    } else if (match[8]) {
-      runs.push(new TextRun({ text: match[9], bold: true }))
-    } else if (match[10]) {
-      runs.push(new TextRun({ text: match[11], italics: true }))
-    } else if (match[12]) {
-      runs.push(new TextRun({ text: match[13], strike: true }))
-    }
-
-    lastIndex = match.index + match[0].length
-  }
-
-  if (lastIndex < text.length) {
-    runs.push(new TextRun({ text: text.slice(lastIndex) }))
-  }
-
-  return runs.length ? runs : [new TextRun({ text: text })]
+function parseInlineContent(text, baseStyle = {}) {
+  return parseInlineRuns(text, baseStyle).map(options => new TextRun(options))
 }
 
 function parseMarkdownToDocx(markdown) {
@@ -931,9 +901,9 @@ function parseMarkdownToDocx(markdown) {
       children.push(new Paragraph({
         spacing: { after: 100 },
         indent: { left: 400 },
-        children: parseInlineContent(trimmed.slice(2)).map(r => new TextRun({ ...r, italics: true, color: '666666' })),
+        children: parseInlineContent(trimmed.slice(2), { italics: true, color: '666666' }),
       }))
-    } else if (trimmed.startsWith('---') || trimmed.startsWith('***') || trimmed.startsWith('___')) {
+    } else if (isHorizontalRule(trimmed)) {
       children.push(new Paragraph({
         spacing: { before: 200, after: 200 },
         border: { bottom: { style: 'single', size: 6, color: 'CCCCCC' } },
@@ -969,10 +939,7 @@ function parseMarkdownToDocx(markdown) {
 }
 
 function renderTable(rows) {
-  const cells = rows.map(row => {
-    const parts = row.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1)
-    return parts.map(p => p.trim())
-  })
+  const cells = rows.map(parseTableCells)
 
   const colCount = cells.reduce((max, r) => Math.max(max, r.length), 0)
   const tableRows = cells.map(cellValues => {
