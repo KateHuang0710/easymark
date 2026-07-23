@@ -38,6 +38,9 @@ npm run dist:mac:universal
   - cross-platform note filename validation
   - title/export sanitization
   - image MIME and magic-byte validation
+- `electron/note-history.js`
+  - hashed per-note local history directories
+  - version validation, retention pruning and rename migration
 - `src/hooks/useNotes.ts`
   - note list/current note state
   - request ordering and primary-pane debounced save
@@ -82,6 +85,7 @@ The custom endpoint must implement an OpenAI-compatible API, including Chat Comp
 
 - `src/services/markdown.test.ts`: XSS, URL and local asset normalization
 - `tests/file-utils.test.cjs`: path traversal, title and image validation
+- `tests/note-history.test.cjs`: version creation, deduplication, pruning, migration and path validation
 - Before release: `npm run check && npm audit`
 - For macOS release procedures, see `MACOS.md`.
 
@@ -90,4 +94,4 @@ The custom endpoint must implement an OpenAI-compatible API, including Chat Comp
 - Replace remaining `document.execCommand` usage with Selection/Range operations.
 - Split highlight.js language registration to reduce the renderer bundle.
 - Add Playwright/Electron end-to-end tests for close-save, dual pane and editor mode switching.
-- Add crash recovery/versioned backups before introducing cloud sync.
+- Add a write-ahead session journal for recovery from process or machine crashes.

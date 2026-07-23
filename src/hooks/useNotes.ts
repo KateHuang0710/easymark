@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Note, NoteSummary } from '../types'
+import { Note, NoteSummary, SaveStatus } from '../types'
 import * as storage from '../services/storage'
 
 interface PendingSave {
@@ -7,9 +7,16 @@ interface PendingSave {
   content: string
 }
 
+const savedStatus = (): SaveStatus => ({ state: 'saved', savedAt: Date.now() })
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Could not save note'
+}
+
 export function useNotes() {
   const [notes, setNotes] = useState<NoteSummary[]>([])
   const [currentNote, setCurrentNote] = useState<Note | null>(null)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -32,10 +39,20 @@ export function useNotes() {
     const pending = pendingSaveRef.current
     if (!pending) return
     pendingSaveRef.current = null
+    setSaveStatus({ state: 'saving' })
     try {
       await storage.saveNote(pending.filename, pending.content)
+      if (pendingSaveRef.current) {
+        setSaveStatus({ state: 'saving' })
+      } else {
+        setSaveStatus(savedStatus())
+      }
+      setCurrentNote(prev => prev?.filename === pending.filename && prev.content === pending.content
+        ? { ...prev, lastModified: Date.now() }
+        : prev)
     } catch (error) {
       if (!pendingSaveRef.current) pendingSaveRef.current = pending
+      setSaveStatus({ state: 'error', error: errorMessage(error) })
       console.error('Auto-save failed:', error)
       throw error
     }
@@ -58,6 +75,7 @@ export function useNotes() {
     const content = await storage.readNote(note.filename)
     if (requestId !== openRequestRef.current) return
     setCurrentNote(content === null ? null : { ...note, content })
+    setSaveStatus(content === null ? { state: 'idle' } : savedStatus())
   }, [flushAutoSave])
 
   const createNote = useCallback(async (title?: string) => {
@@ -71,6 +89,7 @@ export function useNotes() {
       content: result.content,
     }
     setCurrentNote(note)
+    setSaveStatus(savedStatus())
     await refreshList()
     return note
   }, [flushAutoSave, refreshList])
@@ -78,7 +97,10 @@ export function useNotes() {
   const deleteNote = useCallback(async (filename: string) => {
     await flushAutoSave()
     await storage.deleteNote(filename)
-    if (currentNoteRef.current?.filename === filename) setCurrentNote(null)
+    if (currentNoteRef.current?.filename === filename) {
+      setCurrentNote(null)
+      setSaveStatus({ state: 'idle' })
+    }
     await refreshList()
   }, [flushAutoSave, refreshList])
 
@@ -93,13 +115,20 @@ export function useNotes() {
     // This avoids a slower manual save overwriting a later keystroke.
     const pending: PendingSave = { filename: note.filename, content }
     pendingSaveRef.current = pending
+    setSaveStatus({ state: 'saving' })
     try {
       await storage.saveNote(pending.filename, pending.content)
-      if (pendingSaveRef.current === pending) pendingSaveRef.current = null
+      if (pendingSaveRef.current === pending) {
+        pendingSaveRef.current = null
+        setSaveStatus(savedStatus())
+      } else {
+        setSaveStatus({ state: 'saving' })
+      }
       setCurrentNote(prev => prev?.filename === pending.filename && prev.content === pending.content
         ? { ...prev, lastModified: Date.now() }
         : prev)
     } catch (error) {
+      setSaveStatus({ state: 'error', error: errorMessage(error) })
       console.error('Manual save failed:', error)
       throw error
     }
@@ -109,12 +138,29 @@ export function useNotes() {
     const note = currentNoteRef.current
     if (!note) return
     pendingSaveRef.current = { filename: note.filename, content }
+    setSaveStatus({ state: 'saving' })
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = undefined
       void flushAutoSave().catch(error => console.error('Scheduled auto-save failed:', error))
     }, 750)
   }, [flushAutoSave])
+
+  const retrySave = useCallback(async () => {
+    await flushAutoSave()
+  }, [flushAutoSave])
+
+  const replaceCurrentNoteContent = useCallback((filename: string, content: string) => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = undefined
+    }
+    if (pendingSaveRef.current?.filename === filename) pendingSaveRef.current = null
+    setCurrentNote(prev => prev?.filename === filename
+      ? { ...prev, content, lastModified: Date.now() }
+      : prev)
+    setSaveStatus(savedStatus())
+  }, [])
 
   const renameNote = useCallback(async (oldFilename: string, newTitle: string) => {
     await flushAutoSave()
@@ -137,6 +183,7 @@ export function useNotes() {
     notes: filteredNotes,
     allNotes: notes,
     currentNote,
+    saveStatus,
     loading,
     searchQuery,
     setSearchQuery,
@@ -145,9 +192,11 @@ export function useNotes() {
     deleteNote,
     saveCurrentNote,
     autoSave,
+    retrySave,
     renameNote,
     refreshList,
     setCurrentNote,
+    replaceCurrentNoteContent,
     flushAutoSave,
   }
 }

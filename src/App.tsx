@@ -9,10 +9,15 @@ import { AIAssistant } from './components/AIAssistant'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ReadingMode } from './components/Editor/ReadingMode'
 import { ExportDialog } from './components/Editor/ExportDialog'
+import { VersionHistoryDialog } from './components/Editor/VersionHistoryDialog'
 import { SearchPanel } from './components/Editor/SearchPanel'
 import { useNotes } from './hooks/useNotes'
-import { Note } from './types'
+import { Note, NoteSummary, SaveStatus } from './types'
 import * as storage from './services/storage'
+
+function saveErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'Could not save note'
+}
 
 function AppContent() {
   const { t } = useTranslation()
@@ -20,6 +25,7 @@ function AppContent() {
   const {
     notes,
     currentNote,
+    saveStatus,
     allNotes,
     searchQuery,
     setSearchQuery,
@@ -28,8 +34,10 @@ function AppContent() {
     deleteNote,
     saveCurrentNote,
     autoSave,
+    retrySave,
     renameNote,
     setCurrentNote,
+    replaceCurrentNoteContent,
     flushAutoSave,
   } = useNotes()
 
@@ -40,6 +48,8 @@ function AppContent() {
   const [exportVisible, setExportVisible] = useState(false)
   const [searchAllVisible, setSearchAllVisible] = useState(false)
   const [secondNote, setSecondNote] = useState<Note | null>(null)
+  const [secondSaveStatus, setSecondSaveStatus] = useState<SaveStatus>({ state: 'idle' })
+  const [historyTarget, setHistoryTarget] = useState<{ pane: 'primary' | 'secondary'; filename: string; title: string } | null>(null)
   const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const secondPendingRef = useRef<{ filename: string; content: string } | null>(null)
   const secondOpenRequestRef = useRef(0)
@@ -52,10 +62,20 @@ function AppContent() {
     const pending = secondPendingRef.current
     if (!pending) return
     secondPendingRef.current = null
+    setSecondSaveStatus({ state: 'saving' })
     try {
       await storage.saveNote(pending.filename, pending.content)
+      if (secondPendingRef.current) {
+        setSecondSaveStatus({ state: 'saving' })
+      } else {
+        setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+      }
+      setSecondNote(prev => prev?.filename === pending.filename && prev.content === pending.content
+        ? { ...prev, lastModified: Date.now() }
+        : prev)
     } catch (error) {
       if (!secondPendingRef.current) secondPendingRef.current = pending
+      setSecondSaveStatus({ state: 'error', error: saveErrorMessage(error) })
       console.error('Second pane auto-save failed:', error)
       throw error
     }
@@ -94,6 +114,7 @@ function AppContent() {
       return
     }
     secondPendingRef.current = { filename: secondNote.filename, content }
+    setSecondSaveStatus({ state: 'saving' })
     if (secondSaveTimerRef.current) clearTimeout(secondSaveTimerRef.current)
     secondSaveTimerRef.current = setTimeout(() => {
       secondSaveTimerRef.current = undefined
@@ -112,6 +133,7 @@ function AppContent() {
       return
     }
     secondPendingRef.current = { filename: secondNote.filename, content }
+    setSecondSaveStatus({ state: 'saving' })
     await flushSecondSave()
   }, [secondNote, currentNote?.filename, flushAutoSave, flushSecondSave])
 
@@ -120,17 +142,29 @@ function AppContent() {
       // Use in-memory content (currentNote.content) which is always up-to-date,
       // not disk content which may be stale due to auto-save debounce (1s).
       setSecondNote({ ...currentNote })
+      setSecondSaveStatus(saveStatus)
       setDualPane(true)
     }
-  }, [settings.dualPane, currentNote, setDualPane])
+  }, [settings.dualPane, currentNote, saveStatus, setDualPane])
 
   const handleDeleteNote = useCallback(async (filename: string) => {
     await flushSecondSave()
     await deleteNote(filename)
     if (secondNote?.filename === filename) {
       setSecondNote(null)
+      setSecondSaveStatus({ state: 'idle' })
     }
   }, [deleteNote, flushSecondSave, secondNote])
+
+  const handlePrimaryNoteSelect = useCallback(async (note: NoteSummary) => {
+    await flushSecondSave()
+    await openNote(note)
+  }, [flushSecondSave, openNote])
+
+  const handleCreateNote = useCallback(async (title?: string) => {
+    await flushSecondSave()
+    return createNote(title)
+  }, [flushSecondSave, createNote])
 
   const handleRenameNote = useCallback(async (oldFilename: string, newTitle: string) => {
     await flushSecondSave()
@@ -145,6 +179,7 @@ function AppContent() {
     void flushSecondSave().then(() => {
       setDualPane(false)
       setSecondNote(null)
+      setSecondSaveStatus({ state: 'idle' })
     }).catch(error => console.error('Could not close second pane because saving failed:', error))
   }, [flushSecondSave, setDualPane])
 
@@ -156,20 +191,48 @@ function AppContent() {
     if (!summary) return
     if (currentNote?.filename === filename) {
       setSecondNote({ ...currentNote })
+      setSecondSaveStatus(saveStatus)
       return
     }
     const content = await storage.readNote(filename)
     if (requestId !== secondOpenRequestRef.current) return
-    if (content !== null) setSecondNote({ ...summary, content })
-  }, [allNotes, currentNote, flushSecondSave])
+    if (content !== null) {
+      setSecondNote({ ...summary, content })
+      setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+    }
+  }, [allNotes, currentNote, flushSecondSave, saveStatus])
+
+  const handleOpenHistory = useCallback(async (pane: 'primary' | 'secondary') => {
+    const note = pane === 'primary' ? currentNote : secondNote
+    if (!note) return
+    if (pane === 'primary' || note.filename === currentNote?.filename) await flushAutoSave()
+    else await flushSecondSave()
+    setHistoryTarget({ pane, filename: note.filename, title: note.title })
+  }, [currentNote, secondNote, flushAutoSave, flushSecondSave])
+
+  const handleVersionRestored = useCallback((content: string) => {
+    if (!historyTarget) return
+    if (historyTarget.pane === 'primary' || historyTarget.filename === currentNote?.filename) {
+      replaceCurrentNoteContent(historyTarget.filename, content)
+    }
+    if (secondNote?.filename === historyTarget.filename) {
+      secondPendingRef.current = null
+      if (secondSaveTimerRef.current) {
+        clearTimeout(secondSaveTimerRef.current)
+        secondSaveTimerRef.current = undefined
+      }
+      setSecondNote(prev => prev ? { ...prev, content, lastModified: Date.now() } : null)
+      setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+    }
+  }, [historyTarget, currentNote?.filename, secondNote?.filename, replaceCurrentNoteContent])
 
   const handleOpenNoteFromSearch = useCallback(async (filename: string) => {
     const note = allNotes.find(n => n.filename === filename)
     if (note) {
-      await openNote(note)
+      await handlePrimaryNoteSelect(note)
     }
     setSearchAllVisible(false)
-  }, [allNotes, openNote])
+  }, [allNotes, handlePrimaryNoteSelect])
 
   const handleReadingMode = useCallback(() => {
     if (currentNote) {
@@ -190,8 +253,8 @@ function AppContent() {
           currentNote={currentNote}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
-          onNoteSelect={note => { void openNote(note).catch(error => console.error('Failed to open note:', error)) }}
-          onNoteCreate={async title => { await createNote(title) }}
+          onNoteSelect={note => { void handlePrimaryNoteSelect(note).catch(error => console.error('Failed to open note:', error)) }}
+          onNoteCreate={async title => { await handleCreateNote(title) }}
           onNoteDelete={async filename => { await handleDeleteNote(filename) }}
           onNoteRename={async (filename, title) => { await handleRenameNote(filename, title) }}
           collapsed={sidebarCollapsed}
@@ -221,6 +284,9 @@ function AppContent() {
                   onChange={handleContentChange}
                   onSave={handleSave}
                   dualPaneMode={true}
+                  saveStatus={saveStatus}
+                  onRetrySave={retrySave}
+                  onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}
                 />
               </div>
               <div className="dual-pane-divider" />
@@ -241,6 +307,9 @@ function AppContent() {
                   onChange={handleSecondContentChange}
                   onSave={handleSecondSave}
                   dualPaneMode={true}
+                  saveStatus={secondNote.filename === currentNote.filename ? saveStatus : secondSaveStatus}
+                  onRetrySave={secondNote.filename === currentNote.filename ? retrySave : flushSecondSave}
+                  onOpenHistory={() => { void handleOpenHistory('secondary').catch(error => console.error('Failed to open note history:', error)) }}
                 />
               </div>
             </div>
@@ -253,6 +322,9 @@ function AppContent() {
               onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
               onSearchAll={() => setSearchAllVisible(true)}
               onReadingMode={handleReadingMode}
+              saveStatus={saveStatus}
+              onRetrySave={retrySave}
+              onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}
             />
           ) : (
             <div className="app-welcome">
@@ -265,7 +337,7 @@ function AppContent() {
               </div>
               <h1>{t.welcome.title}</h1>
               <p>{t.welcome.subtitle}</p>
-              <button className="app-welcome-btn" onClick={() => { void createNote().catch(error => console.error('Failed to create note:', error)) }}>
+              <button className="app-welcome-btn" onClick={() => { void handleCreateNote().catch(error => console.error('Failed to create note:', error)) }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
@@ -296,6 +368,13 @@ function AppContent() {
             title={currentNote.title}
           />
         )}
+        <VersionHistoryDialog
+          visible={Boolean(historyTarget)}
+          filename={historyTarget?.filename || null}
+          title={historyTarget?.title || ''}
+          onClose={() => setHistoryTarget(null)}
+          onRestored={handleVersionRestored}
+        />
       </div>
     </div>
   )

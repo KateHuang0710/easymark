@@ -8,6 +8,7 @@ import { ContextMenu, useEditorContextMenu } from './ContextMenu'
 import { InlineSuggestion } from './InlineSuggestion'
 import { getInlineCompletion, isConfigured } from '../../services/ai'
 import { useSettings } from '../../contexts/SettingsContext'
+import { SaveStatus } from '../../types'
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -40,6 +41,9 @@ interface MarkdownEditorProps {
   onSearchAll?: () => void
   onReadingMode?: () => void
   dualPaneMode?: boolean
+  saveStatus?: SaveStatus
+  onRetrySave?: () => void | Promise<void>
+  onOpenHistory?: () => void
 }
 
 type Tab = 'edit' | 'source' | 'preview'
@@ -128,7 +132,7 @@ function selToString(): string {
   return sel && sel.rangeCount > 0 ? sel.toString() : ''
 }
 
-export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode }: MarkdownEditorProps) {
+export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory }: MarkdownEditorProps) {
   const { t } = useTranslation()
   const editorRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<Tab>('edit')
@@ -730,6 +734,35 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
   const wordCount = useMemo(() => countWords(content), [content])
   const lineCount = useMemo(() => content.split('\n').length, [content])
+  const saveStateLabel = saveStatus?.state === 'saving'
+    ? t.editor.saving
+    : saveStatus?.state === 'error'
+      ? `${t.editor.saveFailed} · ${t.editor.retrySave}`
+      : t.editor.saved
+  const saveStateTitle = saveStatus?.state === 'error' ? saveStatus.error || t.editor.saveFailed : saveStateLabel
+  const saveControls = saveStatus ? (
+    <>
+      <button
+        className={`editor-save-status ${saveStatus.state}`}
+        onClick={() => {
+          if (saveStatus.state === 'error' && onRetrySave) {
+            void Promise.resolve(onRetrySave()).catch(error => console.error('Failed to retry note save:', error))
+          }
+        }}
+        disabled={saveStatus.state !== 'error' || !onRetrySave}
+        title={saveStateTitle}
+        aria-live="polite"
+      >
+        <span className="editor-save-dot" />
+        {saveStateLabel}
+      </button>
+      {onOpenHistory && (
+        <button className="editor-history-action" onClick={onOpenHistory} title={t.editor.versionHistory}>
+          {t.editor.versionHistory}
+        </button>
+      )}
+    </>
+  ) : null
 
   if (viewMode === 'preview') {
     return (
@@ -747,6 +780,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           <div className="editor-toolbar-spacer" />
           <span className="editor-mode-label">{t.editor.preview}</span>
           <div className="editor-toolbar-end">
+            {saveControls}
             <span className="editor-status">{wordCount} {t.editor.words} · {lineCount} {t.editor.lines}</span>
           </div>
         </div>
@@ -803,6 +837,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           <div className="editor-toolbar-spacer" />
           <span className="editor-mode-label">{t.editor.source}</span>
           <div className="editor-toolbar-end">
+            {saveControls}
             <span className="editor-status">{wordCount} {t.editor.words} · {lineCount} {t.editor.lines}</span>
           </div>
         </div>
@@ -1051,6 +1086,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           {lineCount} {t.editor.lines || 'lines'}
         </span>
         <span className="editor-status-spacer" />
+        {saveControls}
         {inlineAiEnabled && <span className="editor-status-item editor-status-ai">AI</span>}
         <span className="editor-status-item editor-status-markdown">Markdown</span>
       </div>

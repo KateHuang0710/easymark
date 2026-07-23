@@ -10,6 +10,12 @@ const {
   sanitizeTitle,
   validateImageDataUrl,
 } = require('./file-utils')
+const {
+  createVersion,
+  listVersions,
+  migrateHistory,
+  readVersion,
+} = require('./note-history')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -25,7 +31,9 @@ let appQuitRequested = false
 let noteMutationQueue = Promise.resolve()
 const notesDir = path.join(app.getPath('documents'), 'EasyMark')
 const assetsDir = path.join(notesDir, 'assets')
+const historyDir = path.join(notesDir, '.history')
 const MAX_NOTE_BYTES = 20 * 1024 * 1024
+const MAX_NOTE_VERSIONS = 10
 const MAX_SEARCH_QUERY_LENGTH = 200
 const MAX_EXPORT_HTML_BYTES = 10 * 1024 * 1024
 
@@ -475,8 +483,39 @@ ipcMain.handle('notes:save', async (event, filename, content) => {
   if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_NOTE_BYTES) throw new Error('Invalid note content')
   await ensureNotesDir()
   const filePath = resolveNotePath(notesDir, filename)
-  await withNoteMutationLock(() => writeNoteAtomically(filePath, content))
+  await withNoteMutationLock(async () => {
+    const previousContent = await readRegularNote(filePath)
+    if (previousContent === content) return
+    await createVersion(historyDir, filename, previousContent, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+    await writeNoteAtomically(filePath, content)
+  })
   return true
+})
+
+ipcMain.handle('notes:listVersions', async (event, filename) => {
+  assertTrustedSender(event)
+  resolveNotePath(notesDir, filename)
+  return withNoteMutationLock(() => listVersions(historyDir, filename, MAX_NOTE_BYTES))
+})
+
+ipcMain.handle('notes:readVersion', async (event, filename, versionId) => {
+  assertTrustedSender(event)
+  resolveNotePath(notesDir, filename)
+  return withNoteMutationLock(() => readVersion(historyDir, filename, versionId, MAX_NOTE_BYTES))
+})
+
+ipcMain.handle('notes:restoreVersion', async (event, filename, versionId) => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  const filePath = resolveNotePath(notesDir, filename)
+  return withNoteMutationLock(async () => {
+    const restoredContent = await readVersion(historyDir, filename, versionId, MAX_NOTE_BYTES)
+    const currentContent = await readRegularNote(filePath)
+    if (restoredContent === currentContent) return restoredContent
+    await createVersion(historyDir, filename, currentContent, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+    await writeNoteAtomically(filePath, restoredContent)
+    return restoredContent
+  })
 })
 
 ipcMain.handle('notes:create', async (event, title) => {
@@ -545,6 +584,8 @@ ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
           await fs.promises.unlink(newPath).catch(() => {})
           throw error
         }
+        await migrateHistory(historyDir, oldFilename, newFilename, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+          .catch(error => console.error('Failed to migrate note history:', error))
         return { filename: newFilename, title: newFilename.slice(0, -3) }
       } catch (error) {
         if (targetHandle) await targetHandle.close().catch(() => {})

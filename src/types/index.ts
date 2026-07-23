@@ -9,6 +9,19 @@ export interface Note extends NoteSummary {
   content: string
 }
 
+export interface NoteVersion {
+  id: string
+  filename: string
+  createdAt: number
+  size: number
+}
+
+export interface SaveStatus {
+  state: 'idle' | 'saving' | 'saved' | 'error'
+  error?: string
+  savedAt?: number
+}
+
 export interface SearchResult {
   filename: string
   title: string
@@ -39,6 +52,9 @@ export interface ElectronAPI {
   listNotes: () => Promise<NoteSummary[]>
   readNote: (filename: string) => Promise<string | null>
   saveNote: (filename: string, content: string) => Promise<boolean>
+  listNoteVersions: (filename: string) => Promise<NoteVersion[]>
+  readNoteVersion: (filename: string, versionId: string) => Promise<string>
+  restoreNoteVersion: (filename: string, versionId: string) => Promise<string>
   createNote: (title: string) => Promise<{ filename: string; title: string; content: string }>
   deleteNote: (filename: string) => Promise<boolean>
   renameNote: (oldFilename: string, newTitle: string) => Promise<{ filename: string; title: string }>

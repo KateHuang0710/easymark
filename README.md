@@ -12,7 +12,8 @@ EasyMark 是一款跨平台、AI 辅助的 Markdown 笔记应用，使用 Electr
 ## 核心功能
 
 - WYSIWYG、Markdown 源码、预览三种编辑模式
-- 防抖自动保存与退出前保存确认
+- 防抖自动保存、可见保存状态、失败重试与退出前保存确认
+- 每篇笔记保留最近 10 个本地历史版本，可预览并一键恢复
 - 双栏编辑、全文搜索、查找替换、大纲和阅读模式
 - 图片粘贴、本地资源安全协议
 - PDF 和 DOCX 导出
@@ -97,6 +98,7 @@ electron/
   main.js          Electron 生命周期、IPC、文件、AI、导出
   preload.js       最小化 contextBridge API
   file-utils.js    文件名与图片输入验证
+  note-history.js  本地历史版本、保留策略与安全读取
 src/
   App.tsx
   components/
@@ -116,4 +118,4 @@ build/
 - 用 Range API 逐步替换编辑器中已废弃的 `document.execCommand`
 - 按需注册 highlight.js 语言，降低 renderer bundle 体积
 - 增加端到端 UI 测试和自动化签名/公证流水线
-- 发布前准备 Developer ID 证书、隐私说明、版本更新策略和崩溃恢复方案
+- 发布前准备 Developer ID 证书、隐私说明、版本更新策略和会话级崩溃恢复日志
