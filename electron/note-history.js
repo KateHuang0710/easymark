@@ -95,6 +95,18 @@ async function readVersion(historyRoot, filename, versionId, maxBytes) {
   }
 }
 
+async function deleteHistory(historyRoot, filename) {
+  let directory
+  try {
+    directory = await noteHistoryDirectory(historyRoot, filename, false)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false
+    throw error
+  }
+  await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 2 })
+  return true
+}
+
 async function pruneVersions(historyRoot, filename, maxBytes, maxVersions = DEFAULT_MAX_VERSIONS) {
   if (!Number.isInteger(maxVersions) || maxVersions < 1) throw new Error('Invalid history retention limit')
   const versions = await listVersions(historyRoot, filename, maxBytes)
@@ -203,6 +215,7 @@ async function migrateHistory(historyRoot, oldFilename, newFilename, maxBytes, m
 module.exports = {
   DEFAULT_MAX_VERSIONS,
   createVersion,
+  deleteHistory,
   historyKey,
   listVersions,
   migrateHistory,

@@ -14,6 +14,7 @@ import { SearchPanel } from './components/Editor/SearchPanel'
 import { useNotes } from './hooks/useNotes'
 import { Note, NoteSummary, SaveStatus } from './types'
 import * as storage from './services/storage'
+import { LatestSaveQueue } from './services/latestSaveQueue'
 
 function saveErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'Could not save note'
@@ -51,40 +52,39 @@ function AppContent() {
   const [secondSaveStatus, setSecondSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const [historyTarget, setHistoryTarget] = useState<{ pane: 'primary' | 'secondary'; filename: string; title: string } | null>(null)
   const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
-  const secondPendingRef = useRef<{ filename: string; content: string } | null>(null)
+  const secondSaveQueueRef = useRef<LatestSaveQueue | null>(null)
   const secondOpenRequestRef = useRef(0)
+
+  if (!secondSaveQueueRef.current) {
+    secondSaveQueueRef.current = new LatestSaveQueue(
+      snapshot => storage.saveNote(snapshot.filename, snapshot.content),
+      {
+        onSaving: () => setSecondSaveStatus({ state: 'saving' }),
+        onSaved: (snapshot, hasPending) => {
+          setSecondSaveStatus(hasPending ? { state: 'saving' } : { state: 'saved', savedAt: Date.now() })
+          setSecondNote(prev => prev?.filename === snapshot.filename && prev.content === snapshot.content
+            ? { ...prev, lastModified: Date.now() }
+            : prev)
+        },
+        onError: error => {
+          setSecondSaveStatus({ state: 'error', error: saveErrorMessage(error) })
+          console.error('Second pane auto-save failed:', error)
+        },
+      },
+    )
+  }
 
   const flushSecondSave = useCallback(async () => {
     if (secondSaveTimerRef.current) {
       clearTimeout(secondSaveTimerRef.current)
       secondSaveTimerRef.current = undefined
     }
-    const pending = secondPendingRef.current
-    if (!pending) return
-    secondPendingRef.current = null
-    setSecondSaveStatus({ state: 'saving' })
-    try {
-      await storage.saveNote(pending.filename, pending.content)
-      if (secondPendingRef.current) {
-        setSecondSaveStatus({ state: 'saving' })
-      } else {
-        setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
-      }
-      setSecondNote(prev => prev?.filename === pending.filename && prev.content === pending.content
-        ? { ...prev, lastModified: Date.now() }
-        : prev)
-    } catch (error) {
-      if (!secondPendingRef.current) secondPendingRef.current = pending
-      setSecondSaveStatus({ state: 'error', error: saveErrorMessage(error) })
-      console.error('Second pane auto-save failed:', error)
-      throw error
-    }
+    return secondSaveQueueRef.current!.flush()
   }, [])
 
   useEffect(() => () => {
     if (secondSaveTimerRef.current) clearTimeout(secondSaveTimerRef.current)
-    const pending = secondPendingRef.current
-    if (pending) void storage.saveNote(pending.filename, pending.content).catch(error => console.error('Final second pane save failed:', error))
+    void secondSaveQueueRef.current?.flush().catch(error => console.error('Final second pane save failed:', error))
   }, [])
 
   useEffect(() => window.electronAPI.onBeforeClose(() => {
@@ -113,7 +113,7 @@ function AppContent() {
       autoSave(content)
       return
     }
-    secondPendingRef.current = { filename: secondNote.filename, content }
+    secondSaveQueueRef.current!.enqueue({ filename: secondNote.filename, content })
     setSecondSaveStatus({ state: 'saving' })
     if (secondSaveTimerRef.current) clearTimeout(secondSaveTimerRef.current)
     secondSaveTimerRef.current = setTimeout(() => {
@@ -132,7 +132,7 @@ function AppContent() {
       await flushAutoSave()
       return
     }
-    secondPendingRef.current = { filename: secondNote.filename, content }
+    secondSaveQueueRef.current!.enqueue({ filename: secondNote.filename, content })
     setSecondSaveStatus({ state: 'saving' })
     await flushSecondSave()
   }, [secondNote, currentNote?.filename, flushAutoSave, flushSecondSave])
@@ -216,7 +216,7 @@ function AppContent() {
       replaceCurrentNoteContent(historyTarget.filename, content)
     }
     if (secondNote?.filename === historyTarget.filename) {
-      secondPendingRef.current = null
+      secondSaveQueueRef.current?.clearPending(historyTarget.filename)
       if (secondSaveTimerRef.current) {
         clearTimeout(secondSaveTimerRef.current)
         secondSaveTimerRef.current = undefined

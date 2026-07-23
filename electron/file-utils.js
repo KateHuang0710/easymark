@@ -3,6 +3,22 @@ const path = require('path')
 const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
 const NOTE_EXTENSION = '.md'
 const MAX_TITLE_LENGTH = 120
+const MAX_TITLE_BYTES = 200
+
+function truncateUtf8(value, maxBytes, maxCodePoints) {
+  let result = ''
+  let bytes = 0
+  let codePoints = 0
+  for (const character of value) {
+    if (codePoints >= maxCodePoints) break
+    const characterBytes = Buffer.byteLength(character, 'utf8')
+    if (bytes + characterBytes > maxBytes) break
+    result += character
+    bytes += characterBytes
+    codePoints += 1
+  }
+  return result
+}
 
 function sanitizeTitle(value, fallback = 'untitled') {
   let title = typeof value === 'string' ? value : ''
@@ -12,8 +28,7 @@ function sanitizeTitle(value, fallback = 'untitled') {
     .replace(/[<>:"/\\|?*]/g, '')
     .replace(/[. ]+$/g, '')
     .trim()
-    .slice(0, MAX_TITLE_LENGTH)
-    .trim()
+  title = truncateUtf8(title, MAX_TITLE_BYTES, MAX_TITLE_LENGTH).trim()
 
   if (!title) title = fallback
   if (WINDOWS_RESERVED_NAMES.test(title)) title = `_${title}`
@@ -21,7 +36,12 @@ function sanitizeTitle(value, fallback = 'untitled') {
 }
 
 function validateNoteFilename(filename) {
-  if (typeof filename !== 'string' || !filename || filename.length > MAX_TITLE_LENGTH + NOTE_EXTENSION.length + 8) {
+  if (
+    typeof filename !== 'string' ||
+    !filename ||
+    filename.length > MAX_TITLE_LENGTH * 2 + NOTE_EXTENSION.length + 8 ||
+    Buffer.byteLength(filename, 'utf8') > 255
+  ) {
     throw new Error('Invalid note filename')
   }
   if (filename.includes('\0') || path.posix.basename(filename) !== filename || path.win32.basename(filename) !== filename) {
@@ -67,6 +87,7 @@ function validateImageDataUrl(dataUrl, maxBytes = 10 * 1024 * 1024) {
 
 module.exports = {
   MAX_TITLE_LENGTH,
+  MAX_TITLE_BYTES,
   resolveNotePath,
   sanitizeExportFilename,
   sanitizeTitle,

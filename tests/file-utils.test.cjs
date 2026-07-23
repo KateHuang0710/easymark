@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const {
+  MAX_TITLE_BYTES,
   resolveNotePath,
   sanitizeTitle,
   validateImageDataUrl,
@@ -40,6 +41,15 @@ test('sanitizeTitle truncates oversized titles', () => {
   const title = sanitizeTitle(long)
   assert.ok(title.length <= 120)
   assert.equal(title, 'a'.repeat(120))
+})
+
+test('sanitizeTitle respects UTF-8 filesystem component limits', () => {
+  const title = sanitizeTitle('汉'.repeat(120))
+  const emojiTitle = sanitizeTitle('😀'.repeat(120))
+  assert.ok(Buffer.byteLength(title, 'utf8') <= MAX_TITLE_BYTES)
+  assert.ok(Buffer.byteLength(emojiTitle, 'utf8') <= MAX_TITLE_BYTES)
+  assert.doesNotThrow(() => validateNoteFilename(`${title}.md`))
+  assert.doesNotMatch(emojiTitle, /[\uD800-\uDBFF]$/, 'title must not end with a split surrogate pair')
 })
 
 test('validateImageDataUrl rejects spoofed MIME types', () => {

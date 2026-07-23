@@ -12,6 +12,7 @@ const {
 } = require('./file-utils')
 const {
   createVersion,
+  deleteHistory,
   listVersions,
   migrateHistory,
   readVersion,
@@ -547,6 +548,7 @@ ipcMain.handle('notes:delete', async (event, filename) => {
     try {
       const stat = await fs.promises.lstat(filePath)
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid note file')
+      await deleteHistory(historyDir, filename)
       await fs.promises.unlink(filePath)
       return true
     } catch (err) {

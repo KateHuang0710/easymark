@@ -659,6 +659,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           sel.removeAllRanges()
           sel.addRange(range)
         }
+        emitChange()
         return
       }
     }

@@ -5,6 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const {
   createVersion,
+  deleteHistory,
   historyKey,
   listVersions,
   migrateHistory,
@@ -42,6 +43,18 @@ test('does not duplicate the latest identical version', async () => {
     assert.ok(await createVersion(historyRoot, 'notes.md', 'same', MAX_BYTES))
     assert.equal(await createVersion(historyRoot, 'notes.md', 'same', MAX_BYTES), null)
     assert.equal((await listVersions(historyRoot, 'notes.md', MAX_BYTES)).length, 1)
+  })
+})
+
+test('deletes all history for a removed note without affecting other notes', async () => {
+  await withHistory(async historyRoot => {
+    await createVersion(historyRoot, 'removed.md', 'secret', MAX_BYTES)
+    await createVersion(historyRoot, 'kept.md', 'keep me', MAX_BYTES)
+
+    assert.equal(await deleteHistory(historyRoot, 'removed.md'), true)
+    assert.deepEqual(await listVersions(historyRoot, 'removed.md', MAX_BYTES), [])
+    assert.equal((await listVersions(historyRoot, 'kept.md', MAX_BYTES)).length, 1)
+    assert.equal(await deleteHistory(historyRoot, 'removed.md'), false)
   })
 })
 
