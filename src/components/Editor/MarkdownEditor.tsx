@@ -17,14 +17,18 @@ const turndown = new TurndownService({
   bulletListMarker: '-',
 })
 
+function getCodeBlockLanguage(node: HTMLElement, code: HTMLElement | null): string {
+  const explicitLanguage = node.getAttribute('data-lang')
+  if (explicitLanguage !== null) return explicitLanguage
+  const languageClass = Array.from(code?.classList || []).find(className => className.startsWith('language-'))
+  return languageClass?.slice('language-'.length) || ''
+}
+
 turndown.addRule('codeblock', {
   filter: ['pre'],
   replacement: (_content: string, node: HTMLElement) => {
     const code = node.querySelector('code')
-    let lang = node.getAttribute('data-lang') || ''
-    if (!lang && code) {
-      lang = (code.className || '').replace(/^language-/, '')
-    }
+    const lang = getCodeBlockLanguage(node, code)
     // The rendered language label is a sibling inside <pre>; only code is data.
     const contentNode = code || node
     const text = contentNode.innerText || contentNode.textContent || ''
@@ -182,6 +186,92 @@ function selectionIsInside(root: HTMLElement | null, range?: Range): boolean {
   const selection = window.getSelection()
   const activeRange = range || (selection?.rangeCount ? selection.getRangeAt(0) : undefined)
   return Boolean(activeRange && (activeRange.commonAncestorContainer === root || root.contains(activeRange.commonAncestorContainer)))
+}
+
+function closestCodeBlock(node: Node | null): HTMLPreElement | null {
+  if (!node) return null
+  const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
+  return element?.closest('pre') as HTMLPreElement | null
+}
+
+function normalizeCodeLanguage(language: string): string {
+  return language.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_+#.-]/g, '')
+}
+
+function setCodeBlockLanguage(pre: HTMLPreElement, language: string): void {
+  const normalizedLanguage = normalizeCodeLanguage(language)
+  pre.setAttribute('data-lang', normalizedLanguage)
+  let code = pre.querySelector('code')
+  if (!code) {
+    code = document.createElement('code')
+    code.textContent = pre.textContent || '\n'
+    pre.replaceChildren(code)
+  }
+  Array.from(code.classList).forEach(className => {
+    if (className.startsWith('language-')) code!.classList.remove(className)
+  })
+  code.classList.add('hljs')
+  if (normalizedLanguage) code.classList.add(`language-${normalizedLanguage}`)
+
+  pre.querySelector('.code-lang-label')?.remove()
+  if (normalizedLanguage) {
+    const label = document.createElement('span')
+    label.className = 'code-lang-label'
+    label.contentEditable = 'false'
+    label.textContent = normalizedLanguage
+    pre.insertBefore(label, code)
+  }
+}
+
+function createCodeBlock(language: string, content: string): HTMLPreElement {
+  const pre = document.createElement('pre')
+  const code = document.createElement('code')
+  code.textContent = content || '\n'
+  pre.appendChild(code)
+  setCodeBlockLanguage(pre, language)
+  return pre
+}
+
+export function removeCodeBlockAtSelection(root: HTMLElement | null, selection = window.getSelection()): boolean {
+  if (!root || !selection?.rangeCount) return false
+  const activeRange = selection.getRangeAt(0)
+  if (!selectionIsInside(root, activeRange)) return false
+  const startPre = closestCodeBlock(activeRange.startContainer)
+  const endPre = closestCodeBlock(activeRange.endContainer)
+  const pre = startPre && startPre === endPre ? startPre : null
+  if (!pre || !root.contains(pre)) return false
+  const contentNode = pre.querySelector('code') || pre
+  if (activeRange.collapsed) {
+    if ((contentNode.textContent || '').replace(/[\s\u00a0\u200b]/g, '')) return false
+  } else {
+    const contentRange = document.createRange()
+    contentRange.selectNodeContents(contentNode)
+    const coversAllContent = activeRange.compareBoundaryPoints(Range.START_TO_START, contentRange) <= 0
+      && activeRange.compareBoundaryPoints(Range.END_TO_END, contentRange) >= 0
+    if (!coversAllContent) return false
+  }
+
+  const previous = pre.previousElementSibling
+  const next = pre.nextElementSibling
+  const caretRange = document.createRange()
+  if (previous) {
+    pre.remove()
+    caretRange.selectNodeContents(previous)
+    caretRange.collapse(false)
+  } else if (next) {
+    pre.remove()
+    caretRange.selectNodeContents(next)
+    caretRange.collapse(true)
+  } else {
+    const paragraph = document.createElement('p')
+    paragraph.appendChild(document.createElement('br'))
+    pre.replaceWith(paragraph)
+    caretRange.setStart(paragraph, 0)
+    caretRange.collapse(true)
+  }
+  selection.removeAllRanges()
+  selection.addRange(caretRange)
+  return true
 }
 
 export function addDeferredDocumentMouseDownListener(handler: (event: MouseEvent) => void): () => void {
@@ -408,16 +498,19 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (!sel || !sel.rangeCount) return
     const range = sel.getRangeAt(0)
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
-    const pre = document.createElement('pre')
-    pre.setAttribute('data-lang', '')
-    const code = document.createElement('code')
-    code.className = 'hljs'
-    code.textContent = '\n'
-    pre.appendChild(code)
+    const existingCodeBlock = closestCodeBlock(range.startContainer)
+    if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) return
+    const selectedText = sel.toString()
+    const pre = createCodeBlock('', selectedText)
+    const code = pre.querySelector('code')!
     range.deleteContents()
     range.insertNode(pre)
     const newRange = document.createRange()
-    newRange.setStart(code, 0)
+    if (selectedText && code.firstChild) {
+      newRange.setStart(code.firstChild, selectedText.length)
+    } else {
+      newRange.setStart(code, 0)
+    }
     newRange.collapse(true)
     sel.removeAllRanges()
     sel.addRange(newRange)
@@ -447,18 +540,27 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     sel.removeAllRanges()
     sel.addRange(range)
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
-    // Create pre element with proper structure
-    const pre = document.createElement('pre')
-    pre.setAttribute('data-lang', lang)
-    const code = document.createElement('code')
-    code.className = `hljs language-${lang}`
-    code.textContent = '\n'
-    pre.appendChild(code)
+    const existingCodeBlock = closestCodeBlock(range.startContainer)
+    if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) {
+      setCodeBlockLanguage(existingCodeBlock, lang)
+      sel.removeAllRanges()
+      sel.addRange(range)
+      editorRef.current.focus()
+      emitChange()
+      return
+    }
+    const selectedText = sel.toString()
+    const pre = createCodeBlock(lang, selectedText)
+    const code = pre.querySelector('code')!
     range.deleteContents()
     range.insertNode(pre)
     // Move cursor inside the code block
     const newRange = document.createRange()
-    newRange.setStart(code, 0)
+    if (selectedText && code.firstChild) {
+      newRange.setStart(code.firstChild, selectedText.length)
+    } else {
+      newRange.setStart(code, 0)
+    }
     newRange.collapse(true)
     sel.removeAllRanges()
     sel.addRange(newRange)
@@ -595,6 +697,12 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (e.altKey && e.shiftKey && e.key === '5') {
       e.preventDefault()
       execFormat('strikeThrough')
+      return
+    }
+
+    if ((e.key === 'Backspace' || e.key === 'Delete') && removeCodeBlockAtSelection(editorRef.current)) {
+      e.preventDefault()
+      emitChange()
       return
     }
 
@@ -945,7 +1053,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           </button>
           <div className="editor-tb-btn-wrap" ref={langPickerRef}>
             <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={handleCodeBlockClick} title={t.editor.codeBlock}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <polyline points="9 9 6 12 9 15" />
+                <polyline points="15 9 18 12 15 15" />
+              </svg>
             </button>
             <button
               className="editor-tb-btn editor-code-language-btn"

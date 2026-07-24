@@ -76,7 +76,8 @@ renderer.code = (text: string, lang: string) => {
     highlighted = escapeHtml(text)
   }
   const langLabel = language && showCodeLang ? `<span class="code-lang-label">${safeLang}</span>` : ''
-  return `<pre data-lang="${safeLang}">${langLabel}<code class="hljs language-${safeLang}">${highlighted}</code></pre>`
+  const languageClass = safeLang ? ` language-${safeLang}` : ''
+  return `<pre data-lang="${safeLang}">${langLabel}<code class="hljs${languageClass}">${highlighted}</code></pre>`
 }
 
 renderer.image = (href: string, title: string | null, text: string) => {

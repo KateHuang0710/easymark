@@ -6,6 +6,7 @@ import {
   applyBlockFormat,
   applyNativeEditingCommand,
   editorHtmlToMarkdown,
+  removeCodeBlockAtSelection,
 } from './MarkdownEditor'
 import { renderMarkdown } from '../../services/markdown'
 
@@ -134,6 +135,74 @@ describe('editorHtmlToMarkdown', () => {
 
   it('preserves code when formatBlock creates a pre without a code child', () => {
     expect(editorHtmlToMarkdown('<pre>plain code</pre>')).toContain('```\nplain code\n```')
+  })
+
+  it('does not mistake the highlight.js marker class for a language', () => {
+    const markdown = editorHtmlToMarkdown('<pre data-lang=""><code class="hljs">plain code</code></pre>')
+    expect(markdown).toContain('```\nplain code\n```')
+    expect(markdown).not.toContain('```hljs')
+  })
+
+  it('reads only a real language class when data-lang is absent', () => {
+    expect(editorHtmlToMarkdown('<pre><code class="hljs language-python">print(1)</code></pre>'))
+      .toContain('```python\nprint(1)\n```')
+  })
+})
+
+describe('removeCodeBlockAtSelection', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+  })
+
+  it('removes the only empty code block without leaving its bordered pre element', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre data-lang=""><code class="hljs"><br></code></pre>'
+    document.body.appendChild(editor)
+    const code = editor.querySelector('code')!
+    const range = document.createRange()
+    range.setStart(code, 0)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(removeCodeBlockAtSelection(editor, selection)).toBe(true)
+    expect(editor.querySelector('pre')).toBeNull()
+    expect(editor.innerHTML).toBe('<p><br></p>')
+  })
+
+  it('does not remove a code block that still contains code', () => {
+    const editor = document.createElement('div')
+    editor.innerHTML = '<pre><code>const value = 1</code></pre>'
+    document.body.appendChild(editor)
+    const codeText = editor.querySelector('code')!.firstChild!
+    const range = document.createRange()
+    range.setStart(codeText, 0)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(removeCodeBlockAtSelection(editor, selection)).toBe(false)
+    expect(editor.querySelector('pre')).not.toBeNull()
+  })
+
+  it('removes the code block when all of its code is selected', () => {
+    const editor = document.createElement('div')
+    editor.innerHTML = '<p>before</p><pre data-lang="javascript"><span class="code-lang-label">javascript</span><code>const value = 1</code></pre>'
+    document.body.appendChild(editor)
+    const code = editor.querySelector('code')!
+    const range = document.createRange()
+    range.selectNodeContents(code)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(removeCodeBlockAtSelection(editor, selection)).toBe(true)
+    expect(editor.querySelector('pre')).toBeNull()
+    expect(editor.textContent).toBe('before')
   })
 })
 
