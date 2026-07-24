@@ -9,7 +9,7 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ onToggleTheme, onOpenSettings, onToggleAI }: TitleBarProps) {
-  const { t, toggleLocale, locale } = useTranslation()
+  const { t } = useTranslation()
   const { settings, aiEnabled } = useSettings()
 
   const [maximized, setMaximized] = useState(false)
@@ -40,9 +40,6 @@ export function TitleBar({ onToggleTheme, onOpenSettings, onToggleAI }: TitleBar
         <span className="title-bar-text">{t.app.name}</span>
       </div>
       <div className="title-bar-actions">
-        <button className="title-bar-btn lang-btn" onClick={toggleLocale} title={t.language.switchLanguage}>
-          <span className="lang-text">{locale === 'zh' ? 'EN' : '中'}</span>
-        </button>
         <button
           className={`title-bar-btn ${aiEnabled ? 'active' : ''}`}
           onClick={onToggleAI}

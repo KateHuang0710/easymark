@@ -20,6 +20,7 @@ const {
 const { isHorizontalRule, parseInlineRuns, parseTableCells } = require('./docx-utils')
 const { ensureRegularDirectory } = require('./safe-directory')
 const { writeFileAtomically } = require('./atomic-file')
+const { migrateLegacyStorage } = require('./storage-migration')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -33,7 +34,8 @@ let closeHandshakePending = false
 let closeHandshakeTimer = null
 let appQuitRequested = false
 let noteMutationQueue = Promise.resolve()
-const notesDir = path.join(app.getPath('documents'), 'EasyMark')
+const legacyNotesDir = path.join(app.getPath('documents'), 'EasyMark')
+const notesDir = path.join(app.getPath('documents'), 'EasyMark Notes')
 const assetsDir = path.join(notesDir, 'assets')
 const historyDir = path.join(notesDir, '.history')
 const MAX_NOTE_BYTES = 20 * 1024 * 1024
@@ -354,6 +356,18 @@ if (!gotSingleInstanceLock) {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
+  let migrationReport = null
+  let migrationError = null
+  try {
+    migrationReport = await migrateLegacyStorage({
+      legacyRoot: legacyNotesDir,
+      destinationRoot: notesDir,
+      maxNoteBytes: MAX_NOTE_BYTES,
+    })
+  } catch (error) {
+    migrationError = error
+    console.error('Failed to migrate legacy EasyMark storage:', error)
+  }
   await ensureNotesDir()
   await loadAIConfig()
 
@@ -405,6 +419,27 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler(() => false)
   createApplicationMenu()
   createWindow()
+
+  if (migrationError || (migrationReport && !migrationReport.alreadyCompleted && migrationReport.migratedNotes.length)) {
+    const isZh = app.getLocale().toLowerCase().startsWith('zh')
+    const detail = migrationError
+      ? (isZh
+          ? `无法自动迁移旧笔记。EasyMark 将使用新目录：${notesDir}\n\n旧文件仍保留在：${legacyNotesDir}`
+          : `Legacy notes could not be migrated automatically. EasyMark will use: ${notesDir}\n\nOriginal files remain in: ${legacyNotesDir}`)
+      : (isZh
+          ? `已将 ${migrationReport.migratedNotes.length} 篇笔记复制到：${notesDir}\n\n旧文件仍保留在原目录。${migrationReport.skippedMarkdown.length ? `另有 ${migrationReport.skippedMarkdown.length} 个非 EasyMark Markdown 文件未迁移。` : ''}`
+          : `${migrationReport.migratedNotes.length} notes were copied to: ${notesDir}\n\nOriginal files remain in the legacy directory.${migrationReport.skippedMarkdown.length ? ` ${migrationReport.skippedMarkdown.length} unrelated Markdown files were not migrated.` : ''}`)
+    void dialog.showMessageBox(mainWindow, {
+      type: migrationError ? 'warning' : 'info',
+      title: isZh ? 'EasyMark 存储目录' : 'EasyMark Storage',
+      message: migrationError
+        ? (isZh ? '笔记目录迁移需要检查' : 'Note storage migration needs attention')
+        : (isZh ? '笔记目录迁移完成' : 'Note storage migration complete'),
+      detail,
+      buttons: [isZh ? '知道了' : 'OK'],
+      noLink: true,
+    })
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

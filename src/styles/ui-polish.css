@@ -104,18 +104,6 @@ select:focus-visible {
   border-color: var(--accent);
 }
 
-.lang-btn {
-  min-width: 36px;
-  padding: 0 9px;
-  border-radius: 8px;
-  background: var(--bg-toolbar);
-  border-color: var(--border-subtle);
-}
-
-.lang-text {
-  opacity: 1;
-}
-
 .title-bar-windows {
   gap: 1px;
   margin-left: 6px;

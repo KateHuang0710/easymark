@@ -261,20 +261,6 @@ input, textarea, button {
   background: var(--accent-muted);
 }
 
-.lang-btn {
-  width: auto;
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-.lang-text {
-  opacity: 0.8;
-}
-.lang-btn:hover .lang-text {
-  opacity: 1;
-}
-
 .title-bar-windows {
   display: flex;
   margin-left: 4px;

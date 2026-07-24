@@ -1,6 +1,6 @@
 # EasyMark
 
-EasyMark 是一款跨平台、AI 辅助的 Markdown 笔记应用，使用 Electron、React、TypeScript 和 Vite 构建。笔记以独立 `.md` 文件保存在用户的 `Documents/EasyMark/` 目录中，图片保存在其 `assets/` 子目录。
+EasyMark 是一款跨平台、AI 辅助的 Markdown 笔记应用，使用 Electron、React、TypeScript 和 Vite 构建。笔记以独立 `.md` 文件保存在用户的 `Documents/EasyMark Notes/` 目录中，图片保存在其 `assets/` 子目录。旧版本的 `Documents/EasyMark/` 数据会在首次启动时保守复制到新目录，原文件不会被删除。
 
 ## 当前状态
 
