@@ -45,7 +45,7 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
       if (path) {
         setResult({ success: true, path })
       } else {
-        setResult({ success: false })
+        setResult(null)
       }
     } catch {
       setResult({ success: false })
@@ -61,7 +61,7 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
       if (path) {
         setResult({ success: true, path })
       } else {
-        setResult({ success: false })
+        setResult(null)
       }
     } catch {
       setResult({ success: false })

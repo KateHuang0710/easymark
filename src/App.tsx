@@ -58,6 +58,10 @@ function AppContent() {
   const secondSaveQueueRef = useRef<LatestSaveQueue | null>(null)
   const secondOpenRequestRef = useRef(0)
 
+  useEffect(() => {
+    if (!settings.readingMode) setReadingModeActive(false)
+  }, [settings.readingMode])
+
   if (!secondSaveQueueRef.current) {
     secondSaveQueueRef.current = new LatestSaveQueue(
       snapshot => storage.saveNote(snapshot.filename, snapshot.content),
@@ -333,7 +337,7 @@ function AppContent() {
               onSplitRight={handleSplitRight}
               onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
               onSearchAll={() => setSearchAllVisible(true)}
-              onReadingMode={handleReadingMode}
+              onReadingMode={settings.readingMode ? handleReadingMode : undefined}
               saveStatus={saveStatus}
               onRetrySave={retrySave}
               onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { addDeferredDocumentMouseDownListener, applyBlockFormat } from './MarkdownEditor'
+import {
+  addDeferredDocumentMouseDownListener,
+  applyBlockFormat,
+  applyNativeEditingCommand,
+  editorHtmlToMarkdown,
+} from './MarkdownEditor'
+import { renderMarkdown } from '../../services/markdown'
 
 describe('applyBlockFormat', () => {
   afterEach(() => {
@@ -44,6 +50,90 @@ describe('applyBlockFormat', () => {
     Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => true) })
 
     expect(applyBlockFormat(editor, 'h1')).toBe(false)
+  })
+
+  it('uses native editing commands for inline formatting', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.textContent = 'format me'
+    document.body.appendChild(editor)
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(applyNativeEditingCommand(editor, 'bold')).toBe(true)
+    expect(execCommand).toHaveBeenCalledWith('bold', false, undefined)
+  })
+})
+
+describe('editorHtmlToMarkdown', () => {
+  it('does not save the visual language label as code content', () => {
+    const markdown = editorHtmlToMarkdown(
+      '<pre data-lang="javascript"><span class="code-lang-label">javascript</span><code>const x = 1</code></pre>',
+    )
+    expect(markdown).toContain('```javascript\nconst x = 1\n```')
+    expect(markdown).not.toContain('javascript\njavascript')
+  })
+
+  it('preserves checked and unchecked task-list markers', () => {
+    const markdown = editorHtmlToMarkdown(
+      '<ul><li><input type="checkbox" checked disabled>done</li><li><input type="checkbox" disabled>todo</li></ul>',
+    )
+    expect(markdown).toContain('[x] done')
+    expect(markdown).toContain('[ ] todo')
+  })
+
+  it('converts protected asset URLs back to portable relative paths', () => {
+    expect(editorHtmlToMarkdown('<p><img src="easymark-asset://local/image-1.png" alt="image"></p>'))
+      .toBe('![image](assets/image-1.png)')
+  })
+
+  it('preserves common structured Markdown through the visual editor', () => {
+    const source = [
+      '# Heading',
+      '',
+      '- [x] finished',
+      '- [ ] pending',
+      '',
+      '```typescript',
+      'const value = 1',
+      '```',
+      '',
+      '![image](assets/image-1.png)',
+      '',
+      '~~removed~~',
+      '',
+      '| Name | Value |',
+      '| --- | ---: |',
+      '| alpha | **one** |',
+    ].join('\n')
+    const html = renderMarkdown(source)
+    expect(html).toContain('<input')
+    expect(html).toContain('align="right"')
+    const markdown = editorHtmlToMarkdown(html)
+
+    expect(markdown).toContain('# Heading')
+    expect(markdown).toContain('[x] finished')
+    expect(markdown).toContain('[ ] pending')
+    expect(markdown).toContain('```typescript\nconst value = 1\n```')
+    expect(markdown).toContain('![image](assets/image-1.png)')
+    expect(markdown).toContain('~~removed~~')
+    expect(markdown).toContain('| Name | Value |')
+    expect(markdown).toContain('| --- | ---: |')
+    expect(markdown).toContain('| alpha | **one** |')
+  })
+
+  it('uses a longer fence when code contains triple backticks', () => {
+    const markdown = editorHtmlToMarkdown('<pre data-lang=""><code>before ``` after</code></pre>')
+    expect(markdown).toContain('````\nbefore ``` after\n````')
+  })
+
+  it('preserves code when formatBlock creates a pre without a code child', () => {
+    expect(editorHtmlToMarkdown('<pre>plain code</pre>')).toContain('```\nplain code\n```')
   })
 })
 

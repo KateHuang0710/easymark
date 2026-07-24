@@ -13,6 +13,7 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
+  const [error, setError] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -30,9 +31,11 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
       setResults([])
       setActiveIndex(-1)
       setSearching(false)
+      setError(false)
       return
     }
     setSearching(true)
+    setError(false)
     try {
       const res = await window.electronAPI.searchAllNotes(q)
       if (requestId !== requestRef.current) return
@@ -42,6 +45,7 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
       if (requestId !== requestRef.current) return
       setResults([])
       setActiveIndex(-1)
+      setError(true)
     }
     if (requestId === requestRef.current) setSearching(false)
   }, [])
@@ -123,7 +127,15 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
         {searching && (
           <div className="search-all-loading">{t.ai.thinking}</div>
         )}
-        {!searching && query && results.length === 0 && (
+        {!searching && error && (
+          <div className="search-all-empty" role="alert">
+            <span>{t.editor.searchAllFailed}</span>
+            <button className="sidebar-empty-btn" onClick={() => { void doSearch(query) }}>
+              {t.sidebar.retry}
+            </button>
+          </div>
+        )}
+        {!searching && !error && query && results.length === 0 && (
           <div className="search-all-empty">{t.editor.searchAllNoResults}</div>
         )}
         {results.map((r, i) => (

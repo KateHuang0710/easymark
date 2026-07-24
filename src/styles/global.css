@@ -2569,6 +2569,12 @@ input, textarea, button {
   color: var(--text-tertiary);
   font-size: 13px;
 }
+.search-all-empty[role="alert"] {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
 .search-all-item {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
@@ -2706,6 +2712,12 @@ input, textarea, button {
 .editor-tb-btn-wrap {
   position: relative;
   display: inline-flex;
+}
+.editor-code-language-btn {
+  width: 16px;
+  min-width: 16px;
+  padding: 0;
+  margin-left: -4px;
 }
 .lang-picker {
   position: absolute;

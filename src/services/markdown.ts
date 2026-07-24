@@ -21,6 +21,17 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
   node.setAttribute('rel', 'noopener noreferrer')
 })
 
+DOMPurify.addHook('uponSanitizeAttribute', (node, hookEvent) => {
+  const tagName = node.tagName?.toLowerCase()
+  if (
+    (tagName === 'th' || tagName === 'td') &&
+    hookEvent.attrName === 'align' &&
+    ['left', 'center', 'right'].includes(hookEvent.attrValue.toLowerCase())
+  ) {
+    hookEvent.forceKeepAttr = true
+  }
+})
+
 export function setShowCodeLang(v: boolean) { showCodeLang = v }
 
 function escapeHtml(s: string): string {

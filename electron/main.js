@@ -19,6 +19,7 @@ const {
 } = require('./note-history')
 const { isHorizontalRule, parseInlineRuns, parseTableCells } = require('./docx-utils')
 const { ensureRegularDirectory } = require('./safe-directory')
+const { writeFileAtomically } = require('./atomic-file')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -72,16 +73,14 @@ function aiConfigPath() {
   return path.join(app.getPath('userData'), AI_CONFIG_FILENAME)
 }
 
-async function persistAIConfig() {
-  const payload = { apiUrl: aiConfig.apiUrl, model: aiConfig.model }
-  if (aiConfig.apiKey && safeStorage.isEncryptionAvailable()) {
-    payload.encryptedApiKey = safeStorage.encryptString(aiConfig.apiKey).toString('base64')
+async function persistAIConfig(config) {
+  const payload = { apiUrl: config.apiUrl, model: config.model }
+  if (config.apiKey && safeStorage.isEncryptionAvailable()) {
+    payload.encryptedApiKey = safeStorage.encryptString(config.apiKey).toString('base64')
   }
   const target = aiConfigPath()
-  const temporary = `${target}.tmp`
   await fs.promises.mkdir(path.dirname(target), { recursive: true })
-  await fs.promises.writeFile(temporary, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 })
-  await fs.promises.rename(temporary, target)
+  await writeFileAtomically(target, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 })
 }
 
 async function loadAIConfig() {
@@ -683,8 +682,10 @@ ipcMain.handle('notes:searchAll', async (event, rawQuery) => {
       const start = Math.max(0, firstMatch - 40)
       const snippet = content.slice(start, start + 160).replace(/\s+/g, ' ').trim()
       results.push({ filename: entry.name, title, snippet, score })
-    } catch {
-      // Ignore files that disappear or become unreadable while searching.
+    } catch (error) {
+      // A note may disappear between readdir and open. Other storage failures
+      // must be visible instead of looking like an empty result set.
+      if (error?.code !== 'ENOENT') throw error
     }
   }
   return results.sort((a, b) => b.score - a.score).slice(0, 20)
@@ -706,15 +707,17 @@ ipcMain.handle('ai:configure', async (event, rawConfig) => {
   if (!suppliedKey && aiConfig.apiKey && new URL(nextUrl).origin !== new URL(aiConfig.apiUrl).origin) {
     throw new Error('Enter the API key again when changing providers')
   }
-  aiConfig = { apiUrl: nextUrl, model: nextModel, apiKey: suppliedKey || aiConfig.apiKey }
-  await persistAIConfig()
+  const nextConfig = { apiUrl: nextUrl, model: nextModel, apiKey: suppliedKey || aiConfig.apiKey }
+  await persistAIConfig(nextConfig)
+  aiConfig = nextConfig
   return { ...publicAIConfig(), persistedSecurely: !aiConfig.apiKey || safeStorage.isEncryptionAvailable() }
 })
 
 ipcMain.handle('ai:clearKey', async event => {
   assertTrustedSender(event)
-  aiConfig = { ...aiConfig, apiKey: '' }
-  await persistAIConfig()
+  const nextConfig = { ...aiConfig, apiKey: '' }
+  await persistAIConfig(nextConfig)
+  aiConfig = nextConfig
   return publicAIConfig()
 })
 
@@ -763,33 +766,39 @@ ipcMain.handle('export:pdf', async (event, html, title) => {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, javascript: false },
   })
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     let settled = false
-    const finish = result => {
+    const finish = (result, error = null) => {
       if (settled) return
       settled = true
       clearTimeout(timeoutId)
       if (!pdfWindow.isDestroyed()) pdfWindow.destroy()
-      resolve(result)
+      if (error) reject(error)
+      else resolve(result)
     }
-    const timeoutId = setTimeout(() => { console.error('PDF export timed out'); finish(null) }, 30000)
+    const timeoutId = setTimeout(() => {
+      const error = new Error('PDF export timed out')
+      console.error(error.message)
+      finish(null, error)
+    }, 30000)
     pdfWindow.webContents.once('did-fail-load', (_event, code, description) => {
-      console.error('PDF window failed to load:', code, description)
-      finish(null)
+      const error = new Error(`PDF window failed to load: ${code} ${description}`)
+      console.error(error.message)
+      finish(null, error)
     })
     pdfWindow.webContents.once('did-finish-load', async () => {
       try {
         const pdf = await pdfWindow.webContents.printToPDF({ printBackground: true, margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 } })
-        await fs.promises.writeFile(filePath, pdf)
+        await writeFileAtomically(filePath, pdf)
         finish(filePath)
       } catch (err) {
         console.error('PDF export error:', err)
-        finish(null)
+        finish(null, err)
       }
     })
     pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(err => {
       console.error('Failed to load PDF content:', err)
-      finish(null)
+      finish(null, err)
     })
   })
 })
@@ -1044,10 +1053,10 @@ ipcMain.handle('export:docx', async (event, markdown, title) => {
     })
 
     const buffer = await Packer.toBuffer(doc)
-    await fs.promises.writeFile(filePath, buffer)
+    await writeFileAtomically(filePath, buffer)
     return filePath
   } catch (err) {
     console.error('DOCX export error:', err)
-    return null
+    throw err
   }
 })

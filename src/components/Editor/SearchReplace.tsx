@@ -54,6 +54,39 @@ export function createTextRange(root: HTMLElement, start: number, length: number
   return range
 }
 
+export function replaceAllTextMatches(root: HTMLElement, query: string, replacement: string): number {
+  if (!query) return 0
+  const text = root.textContent || ''
+  const lower = text.toLowerCase()
+  const needle = query.toLowerCase()
+  const matches: number[] = []
+  let index = lower.indexOf(needle)
+  while (index !== -1) {
+    matches.push(index)
+    index = lower.indexOf(needle, index + needle.length)
+  }
+  for (const start of matches.reverse()) {
+    const range = createTextRange(root, start, query.length)
+    if (!range) continue
+    replaceRangeText(range, replacement)
+  }
+  return matches.length
+}
+
+export function replaceRangeText(range: Range, replacement: string): void {
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, replacement)) return
+  range.deleteContents()
+  const textNode = document.createTextNode(replacement)
+  range.insertNode(textNode)
+  range.setStartAfter(textNode)
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+}
+
 export function findMatchIndex(
   text: string,
   query: string,
@@ -85,10 +118,10 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (visible) {
-      try { localStorage.setItem(STORAGE_KEY, search) } catch {}
-      setTimeout(() => inputRef.current?.focus(), 50)
-    }
+    if (!visible) return
+    try { localStorage.setItem(STORAGE_KEY, search) } catch {}
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 50)
+    return () => window.clearTimeout(timer)
   }, [visible, search])
 
   useEffect(() => {
@@ -152,9 +185,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
     if (!sel || !sel.rangeCount) return
     const text = sel.toString()
     if (text.toLowerCase() === search.toLowerCase()) {
-      sel.getRangeAt(0).deleteContents()
-      sel.getRangeAt(0).insertNode(document.createTextNode(replace))
-      sel.removeAllRanges()
+      replaceRangeText(sel.getRangeAt(0), replace)
       syncMarkdown()
       findNext(1)
     }
@@ -162,24 +193,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
 
   const replaceAll = useCallback(() => {
     if (!search || !editorRef.current) return
-    const el = editorRef.current
-    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null)
-    const nodes: { node: Text; idx: number }[] = []
-    const q = search.toLowerCase()
-    while (walk.nextNode()) {
-      const node = walk.currentNode as Text
-      const lower = (node.textContent || '').toLowerCase()
-      let idx = lower.indexOf(q)
-      while (idx !== -1) {
-        nodes.push({ node, idx })
-        idx = lower.indexOf(q, idx + q.length)
-      }
-    }
-    for (const { node, idx } of nodes.reverse()) {
-      const before = node.textContent?.slice(0, idx) || ''
-      const after = node.textContent?.slice(idx + search.length) || ''
-      node.textContent = before + replace + after
-    }
+    replaceAllTextMatches(editorRef.current, search, replace)
     syncMarkdown()
   }, [search, replace, editorRef, syncMarkdown])
 

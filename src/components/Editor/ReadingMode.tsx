@@ -20,10 +20,18 @@ export function ReadingMode({ content, title, onClose, onEdit }: ReadingModeProp
   const [summary, setSummary] = useState('')
   const [summarizing, setSummarizing] = useState(false)
   const mountedRef = useRef(true)
+  const summaryRequestRef = useRef(0)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+
+  useEffect(() => {
+    summaryRequestRef.current += 1
+    setSummary('')
+    setSummarizing(false)
+  }, [content, title])
   const isZh = locale === 'zh'
 
   const readingTime = useMemo(() => estimateReadingTime(content), [content])
@@ -32,17 +40,20 @@ export function ReadingMode({ content, title, onClose, onEdit }: ReadingModeProp
 
   const handleSummarize = useCallback(async () => {
     if (!isConfigured()) return
+    const requestId = ++summaryRequestRef.current
     setSummarizing(true)
     try {
       const truncated = content.length > MAX_SUMMARY_CHARS
         ? content.slice(0, MAX_SUMMARY_CHARS) + '\n\n[...]'
         : content
       const result = await getSummary(truncated)
-      if (mountedRef.current) setSummary(result)
+      if (mountedRef.current && requestId === summaryRequestRef.current) setSummary(result)
     } catch {
-      if (mountedRef.current) setSummary(isZh ? '生成摘要失败' : 'Failed to generate summary')
+      if (mountedRef.current && requestId === summaryRequestRef.current) {
+        setSummary(isZh ? '生成摘要失败' : 'Failed to generate summary')
+      }
     }
-    if (mountedRef.current) setSummarizing(false)
+    if (mountedRef.current && requestId === summaryRequestRef.current) setSummarizing(false)
   }, [content, isZh])
 
   return (

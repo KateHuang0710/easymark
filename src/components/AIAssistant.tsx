@@ -26,6 +26,7 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
   const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
 
@@ -102,6 +103,9 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
     if (selectedEditor instanceof HTMLTextAreaElement) {
       const start = selectedEditor.selectionStart
       const end = selectedEditor.selectionEnd
+      selectedEditor.focus()
+      selectedEditor.setSelectionRange(start, end)
+      if (document.execCommand('insertText', false, text)) return
       selectedEditor.setRangeText(text, start, end, 'end')
       selectedEditor.dispatchEvent(new Event('input', { bubbles: true }))
       selectedEditor.focus()
@@ -119,6 +123,9 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
       range.selectNodeContents(selectedEditor)
       range.collapse(false)
     }
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    if (document.execCommand('insertText', false, text)) return
     const textNode = document.createTextNode(text)
     range.insertNode(textNode)
     range.setStartAfter(textNode)

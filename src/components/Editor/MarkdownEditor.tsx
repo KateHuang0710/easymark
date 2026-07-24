@@ -25,11 +25,90 @@ turndown.addRule('codeblock', {
     if (!lang && code) {
       lang = (code.className || '').replace(/^language-/, '')
     }
-    // Use innerText instead of textContent to preserve <br> as newlines
-    const text = node.innerText || node.textContent || ''
-    return '```' + lang + '\n' + text + '\n```\n\n'
+    // The rendered language label is a sibling inside <pre>; only code is data.
+    const contentNode = code || node
+    const text = contentNode.innerText || contentNode.textContent || ''
+    const longestFence = Math.max(0, ...Array.from(text.matchAll(/`+/g), match => match[0].length))
+    const fence = '`'.repeat(Math.max(3, longestFence + 1))
+    return fence + lang + '\n' + text + '\n' + fence + '\n\n'
   },
 })
+
+turndown.addRule('strikethrough', {
+  filter: node => ['DEL', 'S', 'STRIKE'].includes(node.nodeName),
+  replacement: content => `~~${content}~~`,
+})
+
+turndown.addRule('taskListItem', {
+  // DOMPurify intentionally strips the checkbox type attribute, while marked
+  // keeps the disabled input and checked state.
+  filter: node => node.nodeName === 'LI' && Array.from(node.children).some(child => child.nodeName === 'INPUT'),
+  replacement: (content: string, node: HTMLElement, options) => {
+    const checkbox = Array.from(node.children).find(child => child.nodeName === 'INPUT') as HTMLInputElement | undefined
+    let prefix = `${options.bulletListMarker}   `
+    const parent = node.parentElement
+    if (parent?.nodeName === 'OL') {
+      const start = Number(parent.getAttribute('start')) || 1
+      prefix = `${start + Array.from(parent.children).indexOf(node)}.  `
+    }
+    const taskContent = `${checkbox?.checked || checkbox?.hasAttribute('checked') ? '[x]' : '[ ]'} ${content.trim()}`
+      .replace(/\n/g, `\n${' '.repeat(prefix.length)}`)
+    return `${prefix}${taskContent}${node.nextSibling ? '\n' : ''}`
+  },
+})
+
+turndown.addRule('portableImage', {
+  filter: ['img'],
+  replacement: (_content: string, node: HTMLElement) => {
+    const alt = node.getAttribute('alt') || ''
+    const title = node.getAttribute('title')
+    let source = node.getAttribute('src') || ''
+    try {
+      const parsed = new URL(source)
+      if (parsed.protocol === 'easymark-asset:' && parsed.hostname === 'local') {
+        const filename = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''))
+        if (filename && !filename.includes('/') && !filename.includes('\\')) source = `assets/${filename}`
+      }
+    } catch {
+      // Relative image URLs are already portable.
+    }
+    if (!source) return alt
+    return `![${alt}](${source}${title ? ` "${title}"` : ''})`
+  },
+})
+
+turndown.addRule('table', {
+  filter: ['table'],
+  replacement: (_content: string, node: HTMLElement) => {
+    const rows = Array.from(node.querySelectorAll('tr'))
+    if (!rows.length) return ''
+    const cells = rows.map(row => Array.from(row.querySelectorAll(':scope > th, :scope > td')).map(cell => (
+      editorHtmlToMarkdown(cell.innerHTML)
+        .replace(/\|/g, '\\|')
+        .replace(/\s*\n\s*/g, '<br>')
+        .trim()
+    )))
+    const columnCount = Math.max(...cells.map(row => row.length))
+    const header = cells[0]
+    const alignments = Array.from(rows[0].querySelectorAll(':scope > th, :scope > td')).map(cell => {
+      const alignment = cell.getAttribute('align')
+      if (alignment === 'center') return ':---:'
+      if (alignment === 'right') return '---:'
+      if (alignment === 'left') return ':---'
+      return '---'
+    })
+    const formatRow = (row: string[]) => `| ${Array.from({ length: columnCount }, (_, index) => row[index] || '').join(' | ')} |`
+    return `\n\n${[
+      formatRow(header),
+      formatRow(Array.from({ length: columnCount }, (_, index) => alignments[index] || '---')),
+      ...cells.slice(1).map(formatRow),
+    ].join('\n')}\n\n`
+  },
+})
+
+export function editorHtmlToMarkdown(html: string): string {
+  return turndown.turndown(html)
+}
 
 interface MarkdownEditorProps {
   content: string
@@ -120,6 +199,11 @@ export function addDeferredDocumentMouseDownListener(handler: (event: MouseEvent
 
 export function applyBlockFormat(root: HTMLElement | null, tagName: string): boolean {
   if (!root || !/^(?:p|blockquote|pre|h[1-6])$/.test(tagName)) return false
+  return applyNativeEditingCommand(root, 'formatBlock', tagName)
+}
+
+export function applyNativeEditingCommand(root: HTMLElement | null, command: string, value?: string): boolean {
+  if (!root) return false
   const selection = window.getSelection()
   if (!selection?.rangeCount) return false
   const range = selection.getRangeAt(0)
@@ -129,12 +213,13 @@ export function applyBlockFormat(root: HTMLElement | null, tagName: string): boo
   root.focus()
   selection.removeAllRanges()
   selection.addRange(savedRange)
-  return document.execCommand('formatBlock', false, tagName)
+  return document.execCommand(command, false, value)
 }
 
-function insertTextAtCursor(text: string) {
+function insertTextAtCursor(root: HTMLElement | null, text: string) {
+  if (applyNativeEditingCommand(root, 'insertText', text)) return true
   const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return
+  if (!root || !sel || !sel.rangeCount || !selectionIsInside(root, sel.getRangeAt(0))) return false
   const range = sel.getRangeAt(0)
   range.deleteContents()
   const textNode = document.createTextNode(text)
@@ -144,6 +229,7 @@ function insertTextAtCursor(text: string) {
   newRange.collapse(true)
   sel.removeAllRanges()
   sel.addRange(newRange)
+  return true
 }
 
 
@@ -170,6 +256,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
   const overlayRef = useRef<HTMLPreElement>(null)
@@ -179,6 +266,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const [showLangPicker, setShowLangPicker] = useState(false)
   const [langFilter, setLangFilter] = useState('')
   const langPickerRef = useRef<HTMLDivElement>(null)
+  const langSelectionRef = useRef<Range | null>(null)
   const { settings } = useSettings()
 
   const COMMON_LANGS = [
@@ -195,6 +283,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       if (langPickerRef.current && !langPickerRef.current.contains(e.target as Node)) {
         setShowLangPicker(false)
         setLangFilter('')
+        langSelectionRef.current = null
       }
     }
     return addDeferredDocumentMouseDownListener(handler)
@@ -222,7 +311,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (!editorRef.current) return contentRef.current
     try {
       const html = editorRef.current.innerHTML
-      return turndown.turndown(html)
+      return editorHtmlToMarkdown(html)
     } catch {
       return editorRef.current.innerText || contentRef.current
     }
@@ -237,49 +326,8 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     onChange(md)
   }, [getMarkdown, onChange])
 
-  function execFormatTag(tagName: string): boolean {
-    const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return false
-    const text = sel.toString()
-    if (!text) return false
-    const range = sel.getRangeAt(0)
-    const contents = range.extractContents()
-    const wrapper = document.createElement(tagName)
-    wrapper.appendChild(contents)
-    range.insertNode(wrapper)
-    const newRange = document.createRange()
-    newRange.selectNodeContents(wrapper)
-    sel.removeAllRanges()
-    sel.addRange(newRange)
-    return true
-  }
-
   function execFormatBlock(tagName: string): boolean {
     return applyBlockFormat(editorRef.current, tagName)
-  }
-
-  function execList(type: 'ul' | 'ol'): boolean {
-    const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return false
-    const node = sel.anchorNode
-    if (!node) return false
-    const block = node.nodeType === Node.ELEMENT_NODE
-      ? (node as HTMLElement).closest('p,li,h1,h2,h3,h4,h5,h6,div')
-      : node.parentElement?.closest('p,li,h1,h2,h3,h4,h5,h6,div')
-    if (block) {
-      const list = document.createElement(type)
-      const li = document.createElement('li')
-      li.innerHTML = block.innerHTML
-      list.appendChild(li)
-      block.parentNode?.replaceChild(list, block)
-      const newRange = document.createRange()
-      newRange.setStart(li, 0)
-      newRange.collapse(true)
-      sel.removeAllRanges()
-      sel.addRange(newRange)
-      return true
-    }
-    return false
   }
 
   const execFormat = useCallback((cmd: string, val?: string) => {
@@ -290,34 +338,33 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     switch (cmd) {
       case 'bold':
-        execFormatTag('strong')
+        applyNativeEditingCommand(el, 'bold')
         break
       case 'italic':
-        execFormatTag('em')
+        applyNativeEditingCommand(el, 'italic')
         break
       case 'strikeThrough':
-        execFormatTag('s')
+        applyNativeEditingCommand(el, 'strikeThrough')
         break
       case 'underline':
-        execFormatTag('u')
+        applyNativeEditingCommand(el, 'underline')
         break
       case 'formatBlock':
         if (val) execFormatBlock(val.replace(/[<>]/g, ''))
         break
       case 'insertUnorderedList':
-        execList('ul')
+        applyNativeEditingCommand(el, 'insertUnorderedList')
         break
       case 'insertOrderedList':
-        execList('ol')
+        applyNativeEditingCommand(el, 'insertOrderedList')
         break
       case 'insertText':
-        if (val) insertTextAtCursor(val)
+        if (val) insertTextAtCursor(el, val)
         break
       case 'cut':
         if (selToString()) {
           navigator.clipboard.writeText(window.getSelection()!.toString()).catch(() => {})
-          const r = window.getSelection()?.getRangeAt(0)
-          r?.deleteContents()
+          applyNativeEditingCommand(el, 'delete')
         }
         break
       case 'copy':
@@ -349,7 +396,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (wrapSelection(before, after)) {
       emitChange()
     } else {
-      insertTextAtCursor(before + after)
+      insertTextAtCursor(editorRef.current, before + after)
       emitChange()
     }
     editorRef.current?.focus()
@@ -378,12 +425,27 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     emitChange()
   }, [emitChange, editorRef])
 
+  const toggleLanguagePicker = useCallback(() => {
+    if (showLangPicker) {
+      langSelectionRef.current = null
+      setShowLangPicker(false)
+      return
+    }
+    const selection = window.getSelection()
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+    langSelectionRef.current = range && selectionIsInside(editorRef.current, range) ? range.cloneRange() : null
+    setShowLangPicker(true)
+  }, [showLangPicker])
+
   const handleLangSelect = useCallback((lang: string) => {
     setShowLangPicker(false)
     setLangFilter('')
     const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return
-    const range = sel.getRangeAt(0)
+    const range = langSelectionRef.current
+    langSelectionRef.current = null
+    if (!sel || !range || !selectionIsInside(editorRef.current, range)) return
+    sel.removeAllRanges()
+    sel.addRange(range)
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
     // Create pre element with proper structure
     const pre = document.createElement('pre')
@@ -423,14 +485,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (!sel || !sel.rangeCount) return
     const range = sel.getRangeAt(0)
     if (!selectionIsInside(editorRef.current, range)) return
-    range.deleteContents()
-    const textNode = document.createTextNode(suggestion)
-    range.insertNode(textNode)
-    const newRange = document.createRange()
-    newRange.setStart(textNode, suggestion.length)
-    newRange.collapse(true)
-    sel.removeAllRanges()
-    sel.addRange(newRange)
+    if (!insertTextAtCursor(editorRef.current, suggestion)) return
     emitChange()
     editorRef.current.focus()
   }, [emitChange])
@@ -455,6 +510,18 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       try { setCaretByOffset(el, saved) } catch {}
     }
   }, [content, viewMode])
+
+  useEffect(() => {
+    if (viewMode === 'edit') return
+    const handleModeShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === '/') {
+        event.preventDefault()
+        setViewMode(current => current === 'source' ? 'preview' : 'edit')
+      }
+    }
+    window.addEventListener('keydown', handleModeShortcut)
+    return () => window.removeEventListener('keydown', handleModeShortcut)
+  }, [viewMode])
 
   const handleSave = useCallback(() => {
     void Promise.resolve(onSave(contentRef.current)).catch(error => console.error('Failed to save note:', error))
@@ -482,21 +549,12 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           const url = prompt('Enter URL:', 'https://')
           if (url) {
             if (text) {
-              const sel = window.getSelection()
-              if (sel?.rangeCount) {
-                const range = sel.getRangeAt(0)
-                range.deleteContents()
-                const node = document.createTextNode(`[${text}](${url})`)
-                range.insertNode(node)
-                range.setStartAfter(node)
-                range.collapse(true)
-                sel.removeAllRanges()
-                sel.addRange(range)
+              if (insertTextAtCursor(editorRef.current, `[${text}](${url})`)) {
                 emitChange()
                 return
               }
             }
-            insertTextAtCursor(`[link](${url})`)
+            insertTextAtCursor(editorRef.current, `[link](${url})`)
             emitChange()
           }
           return
@@ -638,7 +696,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       const pair = AUTO_PAIRS[e.key]
       if (pair && pair !== e.key) {
         e.preventDefault()
-        insertTextAtCursor(e.key + pair)
+        insertTextAtCursor(editorRef.current, e.key + pair)
         const sel = window.getSelection()
         if (sel && sel.rangeCount) {
           const range = sel.getRangeAt(0)
@@ -708,9 +766,9 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       const temp = document.createElement('div')
       temp.innerHTML = html
       const plainText = temp.textContent || text
-      insertTextAtCursor(plainText)
+      insertTextAtCursor(editorRef.current, plainText)
     } else {
-      insertTextAtCursor(text)
+      insertTextAtCursor(editorRef.current, text)
     }
     emitChange()
   }, [emitChange])
@@ -886,8 +944,19 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>
           </button>
           <div className="editor-tb-btn-wrap" ref={langPickerRef}>
-            <button className="editor-tb-btn" onClick={handleCodeBlockClick} title={t.editor.codeBlock}>
+            <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={handleCodeBlockClick} title={t.editor.codeBlock}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            </button>
+            <button
+              className="editor-tb-btn editor-code-language-btn"
+              onMouseDown={e => e.preventDefault()}
+              onClick={toggleLanguagePicker}
+              title={t.editor.codeLanguage}
+              aria-expanded={showLangPicker}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
             </button>
             {showLangPicker && (
               <div className="lang-picker">
@@ -897,10 +966,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
                     type="text"
                     value={langFilter}
                     onChange={e => setLangFilter(e.target.value)}
-                    placeholder="Filter languages..."
+                    placeholder={t.editor.filterLanguages}
                     autoFocus
                     onKeyDown={e => {
-                      if (e.key === 'Escape') { setShowLangPicker(false); setLangFilter('') }
+                      if (e.key === 'Escape') { setShowLangPicker(false); setLangFilter(''); langSelectionRef.current = null }
                       if (e.key === 'Enter' && langFilter.trim()) {
                         handleLangSelect(langFilter.trim().toLowerCase())
                       }
@@ -942,7 +1011,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
               const sel = window.getSelection()
               const text = sel?.toString() || 'link'
               const md = `[${text}](${url})`
-              insertTextAtCursor(md)
+              insertTextAtCursor(editorRef.current, md)
               emitChange()
               editorRef.current?.focus()
             }
