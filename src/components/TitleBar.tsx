@@ -9,7 +9,7 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ onToggleTheme, onOpenSettings, onToggleAI }: TitleBarProps) {
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
   const { settings, aiEnabled } = useSettings()
 
   const [maximized, setMaximized] = useState(false)
@@ -31,10 +31,11 @@ export function TitleBar({ onToggleTheme, onOpenSettings, onToggleAI }: TitleBar
     <div className="title-bar">
       <div className="title-bar-drag">
         <div className="title-bar-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-            <path d="M8 7h8M8 11h6M8 15h4" />
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 2.75h9.25L19 7.5v13.75H5z" fill="currentColor" opacity="0.2" />
+            <path d="M14.25 2.75V7.5H19" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            <path d="m8.25 12.5 2.25 2.25 5-5" stroke="#C4705A" strokeWidth="2.25" strokeLinecap="square" strokeLinejoin="miter" />
+            <path d="M8.25 17.75h4.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         </div>
         <span className="title-bar-text">{t.app.name}</span>
@@ -68,7 +69,7 @@ export function TitleBar({ onToggleTheme, onOpenSettings, onToggleAI }: TitleBar
             </svg>
           )}
         </button>
-        <button className="title-bar-btn" onClick={() => { void window.electronAPI.openHelp().catch(error => console.error('Failed to open help:', error)) }} title={t.titleBar.help || 'Help'}>
+        <button className="title-bar-btn" onClick={() => { void window.electronAPI.openHelp(locale).catch(error => console.error('Failed to open help:', error)) }} title={t.titleBar.help || 'Help'}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
           </svg>

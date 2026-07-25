@@ -300,6 +300,7 @@ export function applyBlockFormat(root: HTMLElement | null, tagName: string): boo
 
 export function applyNativeEditingCommand(root: HTMLElement | null, command: string, value?: string): boolean {
   if (!root) return false
+  if (typeof document.execCommand !== 'function') return false
   const selection = window.getSelection()
   if (!selection?.rangeCount) return false
   const range = selection.getRangeAt(0)
@@ -344,8 +345,13 @@ export function insertInlineElement(
   if (range.collapsed) {
     element.textContent = fallbackText
   } else {
-    element.appendChild(range.extractContents())
+    element.appendChild(range.cloneContents())
   }
+  if (applyNativeEditingCommand(root, 'insertHTML', element.outerHTML)) return true
+
+  element.replaceChildren()
+  if (range.collapsed) element.textContent = fallbackText
+  else element.appendChild(range.extractContents())
   range.insertNode(element)
 
   const nextRange = document.createRange()
@@ -363,6 +369,77 @@ export function isCaretAtEndOfElement(element: HTMLElement, range: Range): boole
   tail.setStart(range.endContainer, range.endOffset)
   tail.setEnd(element, element.childNodes.length)
   return tail.toString().length === 0
+}
+
+export function getHistoryShortcut(key: string, shiftKey = false): 'undo' | 'redo' | null {
+  const normalizedKey = key.toLowerCase()
+  if (normalizedKey === 'z') return shiftKey ? 'redo' : 'undo'
+  if (normalizedKey === 'y') return 'redo'
+  return null
+}
+
+function hasMeaningfulNodeContent(node: ParentNode): boolean {
+  if ((node.textContent || '').replace(/[\s\u00a0\u200b]/g, '')) return true
+  return Boolean(node.querySelector?.('img,hr,pre,table,ul,ol'))
+}
+
+export function exitBlockquoteAtSelection(
+  root: HTMLElement | null,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (!range.collapsed || !selectionIsInside(root, range)) return false
+  const element = range.startContainer.nodeType === Node.ELEMENT_NODE
+    ? range.startContainer as Element
+    : range.startContainer.parentElement
+  const blockquote = element?.closest('blockquote') as HTMLQuoteElement | null
+  if (!blockquote || !root.contains(blockquote) || !blockquote.parentNode) return false
+
+  const trailingRange = document.createRange()
+  trailingRange.setStart(range.startContainer, range.startOffset)
+  trailingRange.setEnd(blockquote, blockquote.childNodes.length)
+  const trailingContent = trailingRange.extractContents()
+
+  const paragraph = document.createElement('p')
+  paragraph.appendChild(document.createElement('br'))
+  blockquote.parentNode.insertBefore(paragraph, blockquote.nextSibling)
+
+  if (hasMeaningfulNodeContent(trailingContent)) {
+    const trailingBlockquote = blockquote.cloneNode(false) as HTMLQuoteElement
+    trailingBlockquote.appendChild(trailingContent)
+    paragraph.parentNode?.insertBefore(trailingBlockquote, paragraph.nextSibling)
+  }
+  if (!hasMeaningfulNodeContent(blockquote)) blockquote.remove()
+
+  const nextRange = document.createRange()
+  nextRange.setStart(paragraph, 0)
+  nextRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(nextRange)
+  root.focus()
+  return true
+}
+
+export function insertSoftBreakAtSelection(
+  root: HTMLElement | null,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return false
+  if (applyNativeEditingCommand(root, 'insertLineBreak')) return true
+
+  range.deleteContents()
+  const br = document.createElement('br')
+  range.insertNode(br)
+  const nextRange = document.createRange()
+  nextRange.setStartAfter(br)
+  nextRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(nextRange)
+  root.focus()
+  return true
 }
 
 
@@ -490,12 +567,12 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         }
         break
       case 'undo':
-        document.execCommand('undo')
-        emitChange()
+        applyNativeEditingCommand(el, 'undo')
+        window.setTimeout(emitChange, 0)
         return
       case 'redo':
-        document.execCommand('redo')
-        emitChange()
+        applyNativeEditingCommand(el, 'redo')
+        window.setTimeout(emitChange, 0)
         return
       default:
         // Fallback for unsupported commands
@@ -669,7 +746,18 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.metaKey) {
-      switch (e.key) {
+      const shortcutKey = e.key.toLowerCase()
+      const historyShortcut = getHistoryShortcut(shortcutKey, e.shiftKey)
+      if (historyShortcut) {
+        // Chromium owns the native Z history shortcuts. Intercepting them before
+        // the contenteditable input event prevents its undo stack from applying.
+        if (shortcutKey === 'z') return
+        e.preventDefault()
+        applyNativeEditingCommand(editorRef.current, historyShortcut)
+        window.setTimeout(emitChange, 0)
+        return
+      }
+      switch (shortcutKey) {
         case 's':
           e.preventDefault(); handleSave(); return
         case 'b':
@@ -683,11 +771,9 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           const url = prompt('Enter URL:', 'https://')
           if (url) insertLink(url)
           return
-        case 'z':
-          e.preventDefault(); document.execCommand(e.shiftKey ? 'redo' : 'undo'); emitChange(); return
         case '1': case '2': case '3': case '4': case '5': case '6':
           e.preventDefault()
-          const hLevel = parseInt(e.key)
+          const hLevel = parseInt(shortcutKey)
           insertBlock(`h${hLevel}`)
           return
         case '/':
@@ -700,12 +786,12 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         insertInlineCode()
         return
       }
-      if (e.shiftKey && e.key === 'C') {
+      if (e.shiftKey && shortcutKey === 'c') {
         e.preventDefault()
         insertBlock('pre')
         return
       }
-      if (e.key === 'f') {
+      if (shortcutKey === 'f') {
         e.preventDefault()
         setSearchVisible(prev => !prev)
         return
@@ -762,6 +848,17 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             sel.addRange(range)
             emitChange()
           }
+          return
+        }
+        const blockquote = node.nodeType === Node.ELEMENT_NODE
+          ? (node as HTMLElement).closest('blockquote')
+          : node.parentElement?.closest('blockquote')
+        if (blockquote) {
+          e.preventDefault()
+          const changed = e.shiftKey
+            ? insertSoftBreakAtSelection(editorRef.current, sel)
+            : exitBlockquoteAtSelection(editorRef.current, sel)
+          if (changed) emitChange()
           return
         }
         const li = node.nodeType === Node.ELEMENT_NODE
@@ -971,6 +1068,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
 
     const handleSourceKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      const shortcutKey = e.key.toLowerCase()
       if (e.key === 'Tab') {
         e.preventDefault()
         const ta = e.currentTarget
@@ -982,10 +1080,16 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         onChange(ta.value)
         return
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && shortcutKey === 's') {
         e.preventDefault()
         handleSave()
         return
+      }
+      if ((e.ctrlKey || e.metaKey) && shortcutKey === 'y') {
+        e.preventDefault()
+        const textarea = e.currentTarget
+        if (typeof document.execCommand === 'function') document.execCommand('redo')
+        window.setTimeout(() => onChange(textarea.value), 0)
       }
     }
 

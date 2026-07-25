@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { getCompletion, getSuggestion, chatWithAI } from '../services/ai'
 import { useSettings } from '../contexts/SettingsContext'
 import { useTranslation } from '../i18n'
+import { renderMarkdown } from '../services/markdown'
 
 interface AIAssistantProps {
   visible: boolean
@@ -14,7 +15,7 @@ type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
 export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps) {
   const { t } = useTranslation()
-  const { aiEnabled } = useSettings()
+  const { aiEnabled, settings } = useSettings()
   const [activeTab, setActiveTab] = useState<AITab>('complete')
   const [input, setInput] = useState('')
   const [output, setOutput] = useState('')
@@ -209,7 +210,10 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
                     {t.ai.insert}
                   </button>
                 </div>
-                <div className="ai-output-content">{output}</div>
+                <div
+                  className="ai-output-content ai-markdown"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(output, settings.showCodeLangLabel) }}
+                />
               </div>
             )}
           </div>
@@ -225,7 +229,14 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
               )}
               {chatHistory.map((msg, i) => (
                 <div key={i} className={`ai-chat-msg ${msg.role}`}>
-                  <div className="ai-chat-bubble">{msg.content}</div>
+                  {msg.role === 'assistant' ? (
+                    <div
+                      className="ai-chat-bubble ai-markdown"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content, settings.showCodeLangLabel) }}
+                    />
+                  ) : (
+                    <div className="ai-chat-bubble">{msg.content}</div>
+                  )}
                 </div>
               ))}
               {loading && (

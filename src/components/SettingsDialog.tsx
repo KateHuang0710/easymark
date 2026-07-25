@@ -415,7 +415,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
                 </div>
                 <h3>EasyMark v1.0.0</h3>
                 <p>{isZh ? 'AI 驱动的 Markdown 笔记应用' : 'AI-powered Markdown note application'}</p>
-                <button className="settings-help-btn" onClick={() => { void window.electronAPI.openHelp().catch(error => console.error('Failed to open help:', error)) }}>
+                <button className="settings-help-btn" onClick={() => { void window.electronAPI.openHelp(locale).catch(error => console.error('Failed to open help:', error)) }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
                   </svg>

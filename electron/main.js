@@ -676,11 +676,14 @@ ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
   })
 })
 
-ipcMain.handle('help:open', async event => {
+ipcMain.handle('help:open', async (event, rawLocale) => {
   assertTrustedSender(event)
+  const helpLocale = rawLocale === 'en' ? 'en' : 'zh'
   const helpPath = path.join(__dirname, '../dist/help.html')
   if (!fs.existsSync(helpPath)) throw new Error('Help file not found')
   if (helpWindow && !helpWindow.isDestroyed()) {
+    await helpWindow.loadFile(helpPath, { hash: helpLocale })
+    helpWindow.setTitle(helpLocale === 'zh' ? 'EasyMark 帮助' : 'EasyMark Help')
     helpWindow.show()
     helpWindow.focus()
     return
@@ -696,7 +699,8 @@ ipcMain.handle('help:open', async event => {
   })
   configureNavigationGuards(helpWindow)
   helpWindow.on('closed', () => { helpWindow = null })
-  await helpWindow.loadFile(helpPath)
+  await helpWindow.loadFile(helpPath, { hash: helpLocale })
+  helpWindow.setTitle(helpLocale === 'zh' ? 'EasyMark 帮助' : 'EasyMark Help')
 })
 
 ipcMain.handle('file:saveImage', async (event, dataUrl) => {

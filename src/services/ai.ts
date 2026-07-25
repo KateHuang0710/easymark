@@ -37,27 +37,69 @@ let connection: AIConnectionConfig = {
   model: 'gpt-4o-mini',
 }
 
-const SYSTEM_PROMPT = `You are EasyMark AI, an assistant integrated into a Markdown note-taking app.
-Help users write better Markdown notes. Follow these rules:
-1. Provide concise, useful suggestions
-2. Use Markdown formatting in your responses when appropriate
-3. When completing a sentence, continue naturally from where the user left off
-4. Keep suggestions brief - no more than 2-3 sentences unless asked
-5. Do not be overly enthusiastic or use emojis excessively
-6. Focus on clarity and substance
-7. If the user asks about the note content, analyze and summarize accurately
-8. When suggesting improvements, explain briefly why`
+const SYSTEM_PROMPT = `You are EasyMark AI, an assistant inside a Markdown note-taking app.
+Follow these response rules:
+1. Reply in the same language as the user's latest request unless they ask for another language.
+2. Be concise, concrete, and factual. Do not add greetings, praise, filler, or generic closing remarks.
+3. Use valid GitHub Flavored Markdown when structure helps. Never wrap the whole response in a code fence.
+4. Do not emit unsafe HTML, scripts, style tags, or event-handler attributes.
+5. Preserve the user's meaning and Markdown structure unless they explicitly request a rewrite.
+6. Do not claim actions were performed when they were not.`
 
-const COMPLETION_PROMPT = `Complete the following Markdown text naturally. Continue the thought, matching the style and context.
-Only return the continuation without any prefix or explanation.\n\n`
+const COMPLETION_PROMPT = `Continue the Markdown text below at the exact point where it ends.
+Output contract:
+- Return only the continuation to insert, with no label, explanation, quotation marks, or concluding sentence.
+- Match the language, tone, tense, list indentation, heading level, and Markdown syntax already in use.
+- Do not repeat the supplied ending.
+- Do not start a new summary or conclusion unless the existing text clearly requires one.
+- Keep the continuation to one short paragraph or one logical Markdown item.
 
-const INLINE_COMPLETION_PROMPT = `You are an inline Markdown completion assistant. The user is typing and needs a short continuation.
-Rules:
-- Only return 1-3 words as a natural continuation (unless completing a code block)
-- Match the style and context of the text
-- Do NOT return explanations or prefixes
-- For code blocks, you may complete the line of code
-- Keep it brief and relevant\n\n`
+Text to continue:
+`
+
+const INLINE_COMPLETION_PROMPT = `You generate ghost-text for an inline Markdown editor.
+Your entire response is inserted at the cursor, so obey this output contract exactly:
+- Return only the missing continuation. No preface, label, explanation, summary, conclusion, or quotation marks.
+- Never output phrases such as "建议", "总结", "总之", "综上", "Here is", "Suggestion", or "Completion".
+- Return exactly one line. Never output a Markdown code fence.
+- For prose, return at most 8 Chinese characters or at most 5 words.
+- For code, complete only the current line and return at most 80 characters.
+- Match the surrounding language, spacing, punctuation, Markdown syntax, and code style.
+- Do not repeat text that already appears before the cursor.
+- If no confident short continuation exists, return an empty response.`
+
+const SUGGESTION_PROMPT = `Review the selected Markdown and suggest specific improvements.
+Output contract:
+- Return valid GitHub Flavored Markdown that can be rendered directly.
+- Start immediately with a short heading such as "### 建议" or its equivalent in the input language.
+- Use concise bullet points. Each point must identify a concrete issue and an actionable change.
+- When a rewrite is useful, add a "### 修改示例" heading (or equivalent) and place the revised text below it as normal Markdown so it renders as content.
+- Use a fenced code block only when the selected text is source code. Do not fence ordinary Markdown examples or the entire response.
+- Do not add greetings, praise, disclaimers, a recap, "总结", "总之", or any closing sentence.
+- Preserve facts and intent; do not invent missing information.`
+
+const INLINE_META_PREFIX = /^(?:(?:续写|补全|建议|答案|输出|结果|completion|suggestion|answer|output|continue|here(?:'s| is))\s*[:：-]\s*)+/i
+const INLINE_META_STATEMENT = /^(?:总之|综上(?:所述)?|总结(?:来说)?|以上(?:就是|是)|希望(?:这些|这能|以上)|(?:here(?:'s| is)|in summary|overall|to summarize)\b)/i
+
+export function sanitizeInlineCompletion(raw: string, textBeforeCursor = ''): string {
+  if (!raw || /```/.test(raw)) return ''
+  let value = raw.replace(/\r/g, '').trim()
+  if (!value || value.includes('\n')) return ''
+  value = value.replace(INLINE_META_PREFIX, '').trim()
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1).trim()
+  }
+  if (!value || value.length > 80 || INLINE_META_STATEMENT.test(value)) return ''
+  if (/^(?:#{1,6}|[-*+]|>)\s/.test(value)) return ''
+  const inCodeFence = (textBeforeCursor.match(/```/g)?.length || 0) % 2 === 1
+  if (!inCodeFence) {
+    const chineseCharacterCount = value.match(/[\u3400-\u9fff]/g)?.length || 0
+    if (chineseCharacterCount > 8) return ''
+    if (!chineseCharacterCount && value.split(/\s+/).filter(Boolean).length > 5) return ''
+  }
+  if (/[A-Za-z0-9]$/.test(textBeforeCursor) && /^[A-Za-z0-9]/.test(value)) value = ` ${value}`
+  return value
+}
 
 export async function initializeAI(): Promise<AIConnectionConfig> {
   connection = await window.electronAPI.getAIConfig()
@@ -117,10 +159,11 @@ export async function getCompletion(text: string, context?: string): Promise<str
 export async function getInlineCompletion(textBeforeCursor: string): Promise<string> {
   if (!connection.configured) return ''
   try {
-    return await callAI([
+    const response = await callAI([
       { role: 'system', content: INLINE_COMPLETION_PROMPT },
-      { role: 'user', content: textBeforeCursor },
+      { role: 'user', content: `Text before cursor:\n<content>\n${textBeforeCursor}\n</content>` },
     ], 30, 0.4)
+    return sanitizeInlineCompletion(response, textBeforeCursor)
   } catch {
     return ''
   }
@@ -128,9 +171,9 @@ export async function getInlineCompletion(textBeforeCursor: string): Promise<str
 
 export async function getSuggestion(text: string): Promise<string> {
   return callAI([
-    { role: 'system', content: SYSTEM_PROMPT + '\n\nProvide a brief suggestion for improvement of the selected text.' },
-    { role: 'user', content: `Suggest improvements for this text:\n\n${text}` },
-  ], 200, 0.5)
+    { role: 'system', content: `${SYSTEM_PROMPT}\n\n${SUGGESTION_PROMPT}` },
+    { role: 'user', content: `Selected Markdown:\n<content>\n${text}\n</content>` },
+  ], 350, 0.35)
 }
 
 export async function chatWithAI(

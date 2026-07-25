@@ -6,8 +6,11 @@ import {
   applyBlockFormat,
   applyNativeEditingCommand,
   editorHtmlToMarkdown,
+  exitBlockquoteAtSelection,
   getCaretOffset,
+  getHistoryShortcut,
   insertInlineElement,
+  insertSoftBreakAtSelection,
   isCaretAtEndOfElement,
   removeCodeBlockAtSelection,
 } from './MarkdownEditor'
@@ -176,6 +179,7 @@ describe('visual editor selection helpers', () => {
     const selection = window.getSelection()!
     selection.removeAllRanges()
     selection.addRange(range)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) })
 
     expect(insertInlineElement(editor, 'code')).toBe(true)
     expect(editor.innerHTML).toBe('<code>selected text</code>')
@@ -210,6 +214,59 @@ describe('visual editor selection helpers', () => {
     range.setStart(heading.lastChild!, 5)
     range.collapse(true)
     expect(isCaretAtEndOfElement(heading, range)).toBe(true)
+  })
+})
+
+describe('editor history shortcuts', () => {
+  it('supports macOS and Windows undo and redo variants case-insensitively', () => {
+    expect(getHistoryShortcut('z')).toBe('undo')
+    expect(getHistoryShortcut('Z', true)).toBe('redo')
+    expect(getHistoryShortcut('y')).toBe('redo')
+    expect(getHistoryShortcut('b')).toBeNull()
+  })
+})
+
+describe('blockquote keyboard behavior', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+    vi.restoreAllMocks()
+  })
+
+  it('exits the quote at the caret and preserves trailing quoted text', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<blockquote><p>before after</p></blockquote>'
+    document.body.appendChild(editor)
+    const text = editor.querySelector('p')!.firstChild!
+    const range = document.createRange()
+    range.setStart(text, 6)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(exitBlockquoteAtSelection(editor, selection)).toBe(true)
+    expect(editor.innerHTML).toBe('<blockquote><p>before</p></blockquote><p><br></p><blockquote><p> after</p></blockquote>')
+    expect(selection.anchorNode).toBe(editor.children[1])
+  })
+
+  it('inserts a soft break inside the current quote', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<blockquote><p>quoted</p></blockquote>'
+    document.body.appendChild(editor)
+    const text = editor.querySelector('p')!.firstChild!
+    const range = document.createRange()
+    range.setStart(text, 3)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) })
+    expect(insertSoftBreakAtSelection(editor, selection)).toBe(true)
+    expect(editor.querySelector('blockquote')!.innerHTML).toBe('<p>quo<br>ted</p>')
   })
 })
 

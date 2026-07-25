@@ -70,7 +70,7 @@ export interface ElectronAPI {
   deleteNote: (filename: string) => Promise<DeleteNoteResult>
   renameNote: (oldFilename: string, newTitle: string) => Promise<RenameNoteResult>
   saveImage: (dataUrl: string) => Promise<{ filename: string }>
-  openHelp: () => Promise<void>
+  openHelp: (locale: 'en' | 'zh') => Promise<void>
   onMaximizedChanged: (callback: (maximized: boolean) => void) => (() => void)
   searchAllNotes: (query: string) => Promise<SearchResult[]>
   exportPDF: (html: string, title: string) => Promise<string | null>

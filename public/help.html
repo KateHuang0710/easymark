@@ -102,9 +102,13 @@
     background: #EEEAE4;
     font-weight: 600;
   }
-  .section-toggle { display: none; }
-  .lang-en, .lang-zh { display: block; }
-  .lang-zh { margin-top: 56px; padding-top: 32px; border-top: 2px solid var(--border); }
+  .locale-target { display: none; }
+  .lang-en, .help-title-en { display: none; }
+  .lang-zh, .help-title-zh { display: block; }
+  #en:target ~ .lang-en,
+  #en:target ~ .help-title-en { display: block; }
+  #en:target ~ .lang-zh,
+  #en:target ~ .help-title-zh { display: none; }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #1A1A1F;
@@ -122,8 +126,16 @@
 <body>
 <div class="container">
 
-<h1>EasyMark Help</h1>
-<p class="subtitle">AI-powered Markdown note application / AI 驱动的 Markdown 笔记应用</p>
+<span id="zh" class="locale-target"></span>
+<span id="en" class="locale-target"></span>
+<div class="help-title-en">
+  <h1>EasyMark Help</h1>
+  <p class="subtitle">AI-powered Markdown note application</p>
+</div>
+<div class="help-title-zh">
+  <h1>EasyMark 帮助</h1>
+  <p class="subtitle">AI 驱动的 Markdown 笔记应用</p>
+</div>
 
 <!-- ==================== English ==================== -->
 <div class="lang-en">
@@ -153,7 +165,8 @@
   <tr><td><kbd>Ctrl+F</kbd></td><td>Search & replace</td></tr>
   <tr><td><kbd>Ctrl+/</kbd></td><td>Toggle preview</td></tr>
   <tr><td><kbd>Ctrl+S</kbd></td><td>Save</td></tr>
-  <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd></td><td>Undo / Redo</td></tr>
+  <tr><td><kbd>Ctrl/Cmd+Z</kbd></td><td>Undo</td></tr>
+  <tr><td><kbd>Ctrl/Cmd+Shift+Z</kbd> / <kbd>Ctrl/Cmd+Y</kbd></td><td>Redo</td></tr>
   <tr><td><kbd>Tab</kbd></td><td>Indent (4 spaces)</td></tr>
 </table>
 
@@ -173,6 +186,7 @@
   <tr><td><code>---</code></td><td>Horizontal rule</td></tr>
   <tr><td><code>| col1 | col2 |</code></td><td>Table</td></tr>
 </table>
+<p>Inside a blockquote, press <kbd>Enter</kbd> to leave the quote or <kbd>Shift+Enter</kbd> to insert a line break within it.</p>
 
 <h2>AI Assistant</h2>
 <p>Click the <strong>person icon</strong> in the title bar to open the AI panel. Before using AI, go to <strong>Settings → AI</strong> and enter your API key.</p>
@@ -229,7 +243,8 @@
   <tr><td><kbd>Ctrl+F</kbd></td><td>搜索替换</td></tr>
   <tr><td><kbd>Ctrl+/</kbd></td><td>切换预览</td></tr>
   <tr><td><kbd>Ctrl+S</kbd></td><td>保存</td></tr>
-  <tr><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd></td><td>撤销 / 重做</td></tr>
+  <tr><td><kbd>Ctrl/Cmd+Z</kbd></td><td>撤销</td></tr>
+  <tr><td><kbd>Ctrl/Cmd+Shift+Z</kbd> / <kbd>Ctrl/Cmd+Y</kbd></td><td>重做</td></tr>
   <tr><td><kbd>Tab</kbd></td><td>缩进（4 空格）</td></tr>
 </table>
 
@@ -249,6 +264,7 @@
   <tr><td><code>---</code></td><td>分隔线</td></tr>
   <tr><td><code>| 列1 | 列2 |</code></td><td>表格</td></tr>
 </table>
+<p>在引用块中，按 <kbd>Enter</kbd> 退出引用，按 <kbd>Shift+Enter</kbd> 在当前引用内换行。</p>
 
 <h2>AI 助手</h2>
 <p>点击标题栏的「人物图标」打开 AI 面板。首次使用需在「设置 → AI」中输入 API Key。</p>

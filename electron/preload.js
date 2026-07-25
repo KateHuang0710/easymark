@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', Object.freeze({
   deleteNote: filename => ipcRenderer.invoke('notes:delete', filename),
   renameNote: (oldFilename, newTitle) => ipcRenderer.invoke('notes:rename', oldFilename, newTitle),
   saveImage: dataUrl => ipcRenderer.invoke('file:saveImage', dataUrl),
-  openHelp: () => ipcRenderer.invoke('help:open'),
+  openHelp: locale => ipcRenderer.invoke('help:open', locale),
   onMaximizedChanged: callback => {
     const handler = (_event, maximized) => callback(Boolean(maximized))
     ipcRenderer.on('window-maximized-changed', handler)
