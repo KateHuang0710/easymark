@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { DeleteNoteResult, Note, NoteSummary, RenameNoteResult } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -16,6 +16,7 @@ interface SidebarProps {
   onRetryLoad: () => void | Promise<unknown>
   collapsed: boolean
   onToggle: () => void
+  createRequestId?: number
 }
 
 export function Sidebar({
@@ -32,6 +33,7 @@ export function Sidebar({
   onRetryLoad,
   collapsed,
   onToggle,
+  createRequestId = 0,
 }: SidebarProps) {
   const { t } = useTranslation()
   const [creating, setCreating] = useState(false)
@@ -45,6 +47,13 @@ export function Sidebar({
     setCreating(true)
     setNewTitle('')
   }
+
+  useEffect(() => {
+    if (!createRequestId) return
+    setCreating(true)
+    setNewTitle('')
+    setOperationError('')
+  }, [createRequestId])
 
   const confirmCreate = async () => {
     const title = newTitle.trim()
@@ -259,7 +268,8 @@ export function Sidebar({
 
       <div className="sidebar-footer">
         <span className="sidebar-footer-text">
-          {t.sidebar.noteCount.replace(/\{count\}/g, String(notes.length))}
+          {(notes.length === 1 ? t.sidebar.noteCount : t.sidebar.noteCountPlural)
+            .replace(/\{count\}/g, String(notes.length))}
         </span>
       </div>
     </div>

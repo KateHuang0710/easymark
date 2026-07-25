@@ -54,6 +54,7 @@ function AppContent() {
   const [secondNote, setSecondNote] = useState<Note | null>(null)
   const [secondSaveStatus, setSecondSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const [historyTarget, setHistoryTarget] = useState<{ pane: 'primary' | 'secondary'; filename: string; title: string } | null>(null)
+  const [createRequestId, setCreateRequestId] = useState(0)
   const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const secondSaveQueueRef = useRef<LatestSaveQueue | null>(null)
   const secondOpenRequestRef = useRef(0)
@@ -177,6 +178,17 @@ function AppContent() {
     return createNote(title)
   }, [flushSecondSave, createNote])
 
+  useEffect(() => {
+    const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'n') return
+      event.preventDefault()
+      setSidebarCollapsed(false)
+      setCreateRequestId(current => current + 1)
+    }
+    window.addEventListener('keydown', handleGlobalShortcut)
+    return () => window.removeEventListener('keydown', handleGlobalShortcut)
+  }, [])
+
   const handleRenameNote = useCallback(async (oldFilename: string, newTitle: string) => {
     secondOpenRequestRef.current += 1
     await flushSecondSave()
@@ -275,6 +287,7 @@ function AppContent() {
           onRetryLoad={refreshList}
           collapsed={sidebarCollapsed}
           onToggle={() => setSidebarCollapsed(prev => !prev)}
+          createRequestId={createRequestId}
         />
         <main className="app-main">
           {readingModeActive && currentNote ? (
