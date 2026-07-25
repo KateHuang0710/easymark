@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { renderMarkdown } from '../../services/markdown'
 import { useTranslation } from '../../i18n'
 import { isConfigured, getSummary } from '../../services/ai'
+import { useSettings } from '../../contexts/SettingsContext'
 
 interface ReadingModeProps {
   content: string
@@ -17,6 +18,7 @@ function estimateReadingTime(text: string): number {
 
 export function ReadingMode({ content, title, onClose, onEdit }: ReadingModeProps) {
   const { t, locale } = useTranslation()
+  const { settings } = useSettings()
   const [summary, setSummary] = useState('')
   const [summarizing, setSummarizing] = useState(false)
   const mountedRef = useRef(true)
@@ -97,7 +99,7 @@ export function ReadingMode({ content, title, onClose, onEdit }: ReadingModeProp
         )}
         <div
           className="reading-mode-body editor-content"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content, settings.showCodeLangLabel) }}
         />
       </div>
     </div>

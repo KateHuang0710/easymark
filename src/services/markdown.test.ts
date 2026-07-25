@@ -23,4 +23,11 @@ describe('renderMarkdown security', () => {
     expect(renderMarkdown('![image](assets/image-1.png)')).toContain('easymark-asset://local/image-1.png')
     expect(normalizeMarkdownAssetUrl('assets/../secret.png')).toBe('assets/../secret.png')
   })
+
+  it('hides language labels without losing code language metadata', () => {
+    const html = renderMarkdown('```typescript\nconst value = 1\n```', false)
+    expect(html).not.toContain('code-lang-label')
+    expect(html).toContain('data-lang="typescript"')
+    expect(html).toContain('language-typescript')
+  })
 })

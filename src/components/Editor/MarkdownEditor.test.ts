@@ -6,6 +6,9 @@ import {
   applyBlockFormat,
   applyNativeEditingCommand,
   editorHtmlToMarkdown,
+  getCaretOffset,
+  insertInlineElement,
+  isCaretAtEndOfElement,
   removeCodeBlockAtSelection,
 } from './MarkdownEditor'
 import { renderMarkdown } from '../../services/markdown'
@@ -146,6 +149,67 @@ describe('editorHtmlToMarkdown', () => {
   it('reads only a real language class when data-lang is absent', () => {
     expect(editorHtmlToMarkdown('<pre><code class="hljs language-python">print(1)</code></pre>'))
       .toContain('```python\nprint(1)\n```')
+  })
+
+  it('preserves underline markup instead of silently dropping the format', () => {
+    expect(editorHtmlToMarkdown('<p><u>important</u></p>')).toBe('<u>important</u>')
+  })
+
+  it('preserves semantic inline code and links inserted by the visual editor', () => {
+    expect(editorHtmlToMarkdown('<p><code>value</code> and <a href="https://example.com/">site</a></p>'))
+      .toBe('`value` and [site](https://example.com/)')
+  })
+})
+
+describe('visual editor selection helpers', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+  })
+
+  it('inserts semantic inline elements instead of escaped Markdown text', () => {
+    const editor = document.createElement('div')
+    editor.textContent = 'selected text'
+    document.body.appendChild(editor)
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(insertInlineElement(editor, 'code')).toBe(true)
+    expect(editor.innerHTML).toBe('<code>selected text</code>')
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toBe('`selected text`')
+  })
+
+  it('does not calculate a caret for a different editor pane', () => {
+    const first = document.createElement('div')
+    const second = document.createElement('div')
+    first.textContent = 'first'
+    second.textContent = 'second'
+    document.body.append(first, second)
+    const range = document.createRange()
+    range.setStart(first.firstChild!, 2)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    expect(getCaretOffset(first)).toBe(2)
+    expect(getCaretOffset(second)).toBeNull()
+  })
+
+  it('detects the true end of a heading with nested formatting', () => {
+    const heading = document.createElement('h1')
+    heading.innerHTML = '<strong>bold</strong> tail'
+    document.body.appendChild(heading)
+    const range = document.createRange()
+    range.setStart(heading.querySelector('strong')!.firstChild!, 4)
+    range.collapse(true)
+    expect(isCaretAtEndOfElement(heading, range)).toBe(false)
+    range.setStart(heading.lastChild!, 5)
+    range.collapse(true)
+    expect(isCaretAtEndOfElement(heading, range)).toBe(true)
   })
 })
 

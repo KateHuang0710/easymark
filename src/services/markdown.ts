@@ -103,12 +103,16 @@ marked.setOptions({
   gfm: true,
 })
 
-export function renderMarkdown(markdown: string): string {
+export function renderMarkdown(markdown: string, showCodeLanguage = showCodeLang): string {
+  const previousShowCodeLang = showCodeLang
+  showCodeLang = showCodeLanguage
   try {
     const result = marked.parse(markdown)
     return sanitizeRenderedHtml(typeof result === 'string' ? result : '')
   } catch {
     return '<p>Error rendering markdown</p>'
+  } finally {
+    showCodeLang = previousShowCodeLang
   }
 }
 

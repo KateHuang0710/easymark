@@ -39,7 +39,7 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
           th { background: ${isDark ? '#333' : '#f5f5f5'}; color: ${isDark ? '#e0e0e0' : '#222'}; }
           a { color: ${isDark ? '#64b5f6' : '#1976d2'}; }
         </style>
-      </head><body>${renderMarkdown(content)}</body></html>`
+      </head><body>${renderMarkdown(content, settings.showCodeLangLabel)}</body></html>`
 
       const path = await window.electronAPI.exportPDF(html, title)
       if (path) {

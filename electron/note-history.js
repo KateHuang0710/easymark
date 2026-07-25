@@ -65,19 +65,16 @@ async function listVersions(historyRoot, filename, maxBytes) {
 
   const entries = await fs.promises.readdir(directory, { withFileTypes: true })
   const versions = await Promise.all(entries.map(async entry => {
-    if (!entry.isFile() || !VERSION_ID_PATTERN.test(entry.name)) return null
-    try {
-      const { handle, stat } = await openRegularVersion(path.join(directory, entry.name), maxBytes)
-      await handle.close()
-      const match = VERSION_ID_PATTERN.exec(entry.name)
-      return {
-        id: entry.name,
-        filename,
-        createdAt: match ? Number(match[1]) : stat.mtimeMs,
-        size: stat.size,
-      }
-    } catch {
-      return null
+    if (!VERSION_ID_PATTERN.test(entry.name)) return null
+    if (!entry.isFile()) throw new Error('Invalid note version')
+    const { handle, stat } = await openRegularVersion(path.join(directory, entry.name), maxBytes)
+    await handle.close()
+    const match = VERSION_ID_PATTERN.exec(entry.name)
+    return {
+      id: entry.name,
+      filename,
+      createdAt: match ? Number(match[1]) : stat.mtimeMs,
+      size: stat.size,
     }
   }))
 

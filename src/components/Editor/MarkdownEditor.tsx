@@ -43,6 +43,11 @@ turndown.addRule('strikethrough', {
   replacement: content => `~~${content}~~`,
 })
 
+turndown.addRule('underline', {
+  filter: ['u'],
+  replacement: content => `<u>${content}</u>`,
+})
+
 turndown.addRule('taskListItem', {
   // DOMPurify intentionally strips the checkbox type attribute, while marked
   // keeps the disabled input and checked state.
@@ -141,10 +146,11 @@ function countWords(text: string): number {
   return trimmed.split(/\s+/).length
 }
 
-function getCaretOffset(root: HTMLElement): number {
+export function getCaretOffset(root: HTMLElement): number | null {
   const sel = window.getSelection()
-  if (!sel || !sel.rangeCount) return 0
+  if (!sel || !sel.rangeCount) return null
   const range = sel.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return null
   const pre = document.createRange()
   pre.selectNodeContents(root)
   pre.setEnd(range.startContainer, range.startOffset)
@@ -198,7 +204,7 @@ function normalizeCodeLanguage(language: string): string {
   return language.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_+#.-]/g, '')
 }
 
-function setCodeBlockLanguage(pre: HTMLPreElement, language: string): void {
+function setCodeBlockLanguage(pre: HTMLPreElement, language: string, showLabel = true): void {
   const normalizedLanguage = normalizeCodeLanguage(language)
   pre.setAttribute('data-lang', normalizedLanguage)
   let code = pre.querySelector('code')
@@ -214,7 +220,7 @@ function setCodeBlockLanguage(pre: HTMLPreElement, language: string): void {
   if (normalizedLanguage) code.classList.add(`language-${normalizedLanguage}`)
 
   pre.querySelector('.code-lang-label')?.remove()
-  if (normalizedLanguage) {
+  if (normalizedLanguage && showLabel) {
     const label = document.createElement('span')
     label.className = 'code-lang-label'
     label.contentEditable = 'false'
@@ -223,12 +229,12 @@ function setCodeBlockLanguage(pre: HTMLPreElement, language: string): void {
   }
 }
 
-function createCodeBlock(language: string, content: string): HTMLPreElement {
+function createCodeBlock(language: string, content: string, showLabel = true): HTMLPreElement {
   const pre = document.createElement('pre')
   const code = document.createElement('code')
   code.textContent = content || '\n'
   pre.appendChild(code)
-  setCodeBlockLanguage(pre, language)
+  setCodeBlockLanguage(pre, language, showLabel)
   return pre
 }
 
@@ -322,6 +328,43 @@ function insertTextAtCursor(root: HTMLElement | null, text: string) {
   return true
 }
 
+export function insertInlineElement(
+  root: HTMLElement | null,
+  tagName: 'code' | 'a',
+  fallbackText = '',
+  attributes: Record<string, string> = {},
+): boolean {
+  const selection = window.getSelection()
+  if (!root || !selection?.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return false
+
+  const element = document.createElement(tagName)
+  Object.entries(attributes).forEach(([name, value]) => element.setAttribute(name, value))
+  if (range.collapsed) {
+    element.textContent = fallbackText
+  } else {
+    element.appendChild(range.extractContents())
+  }
+  range.insertNode(element)
+
+  const nextRange = document.createRange()
+  if (element.textContent) nextRange.selectNodeContents(element)
+  else nextRange.setStart(element, 0)
+  selection.removeAllRanges()
+  selection.addRange(nextRange)
+  root.focus()
+  return true
+}
+
+export function isCaretAtEndOfElement(element: HTMLElement, range: Range): boolean {
+  if (!range.collapsed || !element.contains(range.endContainer)) return false
+  const tail = document.createRange()
+  tail.setStart(range.endContainer, range.endOffset)
+  tail.setEnd(element, element.childNodes.length)
+  return tail.toString().length === 0
+}
+
 
 function markEditorActive(element: HTMLElement) {
   document.querySelectorAll<HTMLElement>('[data-editor-active="true"]').forEach(active => {
@@ -380,22 +423,6 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   }, [showLangPicker])
 
   const inlineAiEnabled = isConfigured() && settings.aiInlineCompletion
-
-  const wrapSelection = useCallback((before: string, after: string) => {
-    const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return false
-    const text = sel.toString()
-    const range = sel.getRangeAt(0)
-    range.deleteContents()
-    const full = document.createTextNode(before + text + after)
-    range.insertNode(full)
-    const newRange = document.createRange()
-    newRange.setStart(full, before.length)
-    newRange.setEnd(full, before.length + text.length)
-    sel.removeAllRanges()
-    sel.addRange(newRange)
-    return true
-  }, [])
 
   const getMarkdown = useCallback((): string => {
     if (!editorRef.current) return contentRef.current
@@ -476,21 +503,25 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     emitChange()
     el?.focus()
-  }, [emitChange, editorRef])
+  }, [emitChange])
 
-  const insertMarkdown = useCallback((before: string, after: string = '') => {
-    if (!selectionIsInside(editorRef.current)) {
-      editorRef.current?.focus()
-      return
-    }
-    if (wrapSelection(before, after)) {
-      emitChange()
-    } else {
-      insertTextAtCursor(editorRef.current, before + after)
-      emitChange()
-    }
+  const insertInlineCode = useCallback(() => {
+    if (insertInlineElement(editorRef.current, 'code')) emitChange()
     editorRef.current?.focus()
-  }, [emitChange, wrapSelection])
+  }, [emitChange])
+
+  const insertLink = useCallback((url: string) => {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return false
+    }
+    if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) return false
+    const inserted = insertInlineElement(editorRef.current, 'a', 'link', { href: parsed.toString() })
+    if (inserted) emitChange()
+    return inserted
+  }, [emitChange])
 
   const handleCodeBlockClick = useCallback(() => {
     // Insert code block immediately with no language
@@ -501,7 +532,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     const existingCodeBlock = closestCodeBlock(range.startContainer)
     if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) return
     const selectedText = sel.toString()
-    const pre = createCodeBlock('', selectedText)
+    const pre = createCodeBlock('', selectedText, settings.showCodeLangLabel)
     const code = pre.querySelector('code')!
     range.deleteContents()
     range.insertNode(pre)
@@ -516,7 +547,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     sel.addRange(newRange)
     editorRef.current?.focus()
     emitChange()
-  }, [emitChange, editorRef])
+  }, [emitChange, settings.showCodeLangLabel])
 
   const toggleLanguagePicker = useCallback(() => {
     if (showLangPicker) {
@@ -542,7 +573,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
     const existingCodeBlock = closestCodeBlock(range.startContainer)
     if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) {
-      setCodeBlockLanguage(existingCodeBlock, lang)
+      setCodeBlockLanguage(existingCodeBlock, lang, settings.showCodeLangLabel)
       sel.removeAllRanges()
       sel.addRange(range)
       editorRef.current.focus()
@@ -550,7 +581,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       return
     }
     const selectedText = sel.toString()
-    const pre = createCodeBlock(lang, selectedText)
+    const pre = createCodeBlock(lang, selectedText, settings.showCodeLangLabel)
     const code = pre.querySelector('code')!
     range.deleteContents()
     range.insertNode(pre)
@@ -566,16 +597,17 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     sel.addRange(newRange)
     editorRef.current?.focus()
     emitChange()
-  }, [emitChange, editorRef])
+  }, [emitChange, settings.showCodeLangLabel])
 
   const { menu: ctxMenu, handleContextMenu, closeMenu } = useEditorContextMenu(
-    editorRef, execFormat, insertMarkdown, emitChange,
+    editorRef, execFormat, insertInlineCode, insertLink, emitChange,
     () => setSearchVisible(true)
   )
 
   const getTextBeforeCursor = useCallback((): string => {
     if (!editorRef.current) return ''
     const offset = getCaretOffset(editorRef.current)
+    if (offset === null) return ''
     const text = editorRef.current.textContent || ''
     const contextLines = text.substring(0, offset).split('\n')
     return contextLines.slice(-3).join('\n')
@@ -606,12 +638,14 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     const el = editorRef.current
     const saved = getCaretOffset(el)
-    const html = renderMarkdown(content)
+    const html = renderMarkdown(content, settings.showCodeLangLabel)
     if (el.innerHTML !== html) {
       el.innerHTML = html
-      try { setCaretByOffset(el, saved) } catch {}
+      if (saved !== null) {
+        try { setCaretByOffset(el, saved) } catch {}
+      }
     }
-  }, [content, viewMode])
+  }, [content, settings.showCodeLangLabel, viewMode])
 
   useEffect(() => {
     if (viewMode === 'edit') return
@@ -646,19 +680,8 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           e.preventDefault(); execFormat('underline'); return
         case 'k':
           e.preventDefault()
-          const sel = window.getSelection()
-          const text = sel?.toString() || ''
           const url = prompt('Enter URL:', 'https://')
-          if (url) {
-            if (text) {
-              if (insertTextAtCursor(editorRef.current, `[${text}](${url})`)) {
-                emitChange()
-                return
-              }
-            }
-            insertTextAtCursor(editorRef.current, `[link](${url})`)
-            emitChange()
-          }
+          if (url) insertLink(url)
           return
         case 'z':
           e.preventDefault(); document.execCommand(e.shiftKey ? 'redo' : 'undo'); emitChange(); return
@@ -674,12 +697,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
       if (e.shiftKey && e.key === '`') {
         e.preventDefault()
-        const codeText = window.getSelection()?.toString() || ''
-        if (codeText) {
-          if (wrapSelection('`', '`')) { emitChange(); return }
-        } else {
-          insertBlock('pre')
-        }
+        insertInlineCode()
         return
       }
       if (e.shiftKey && e.key === 'C') {
@@ -756,7 +774,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         const h = node.nodeType === Node.ELEMENT_NODE
           ? (node as HTMLElement).closest('h1,h2,h3,h4,h5,h6')
           : node.parentElement?.closest('h1,h2,h3,h4,h5,h6')
-        if (h && sel.anchorOffset === (sel.anchorNode?.textContent?.length || 0)) {
+        if (h && isCaretAtEndOfElement(h as HTMLElement, sel.getRangeAt(0))) {
           e.preventDefault()
           const p = document.createElement('p')
           p.innerHTML = '<br>'
@@ -818,7 +836,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
     }
 
-  }, [handleSave, emitChange, execFormat, insertBlock, wrapSelection])
+  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items
@@ -941,7 +959,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         </div>
         <div
           className="editor-content editor-preview"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content, settings.showCodeLangLabel) }}
         />
       </div>
     )
@@ -1030,7 +1048,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           <button className="editor-tb-btn" onClick={() => execFormat('strikeThrough')} title={t.editor.strikethrough}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 12h12M3 5l3 2M18 5l-3 2M5 19l3-2M19 19l-3-2"/></svg>
           </button>
-          <button className="editor-tb-btn" onClick={() => insertMarkdown('`', '`')} title={t.editor.inlineCode}>
+          <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={insertInlineCode} title={t.editor.inlineCode}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           </button>
         </div>
@@ -1117,15 +1135,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         </div>
         <div className="editor-toolbar-divider" />
         <div className="editor-toolbar-group">
-          <button className="editor-tb-btn" onClick={() => {
+          <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
             const url = prompt('Enter URL:', 'https://')
             if (url) {
-              const sel = window.getSelection()
-              const text = sel?.toString() || 'link'
-              const md = `[${text}](${url})`
-              insertTextAtCursor(editorRef.current, md)
-              emitChange()
-              editorRef.current?.focus()
+              insertLink(url)
             }
           }} title={t.editor.insertLink}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>

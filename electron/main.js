@@ -21,6 +21,7 @@ const { isHorizontalRule, parseInlineRuns, parseTableCells } = require('./docx-u
 const { ensureRegularDirectory } = require('./safe-directory')
 const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
+const { renameFileCaseSafely } = require('./case-rename')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -613,6 +614,21 @@ ipcMain.handle('notes:rename', async (event, oldFilename, newTitle) => {
   if (`${safeTitle}.md` === oldFilename) return { filename: oldFilename, title: safeTitle }
 
   return withNoteMutationLock(async () => {
+    const requestedFilename = `${safeTitle}.md`
+    if (requestedFilename.toLocaleLowerCase() === oldFilename.toLocaleLowerCase()) {
+      const renamed = await renameFileCaseSafely(oldPath, resolveNotePath(notesDir, requestedFilename))
+      if (renamed) {
+        let historyMigrationFailed = false
+        try {
+          await migrateHistory(historyDir, oldFilename, requestedFilename, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+        } catch (error) {
+          historyMigrationFailed = true
+          console.error('Failed to migrate note history:', error)
+        }
+        return { filename: requestedFilename, title: safeTitle, historyMigrationFailed }
+      }
+    }
+
     const { handle: sourceHandle } = await openRegularNote(oldPath)
     let content
     try {

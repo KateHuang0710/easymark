@@ -104,6 +104,30 @@ test('copies supported assets without following symbolic links', async t => {
   })
 })
 
+test('renames conflicting assets and rewrites note and history references', async () => {
+  await withTemporaryDirectory(async root => {
+    const legacy = path.join(root, 'EasyMark')
+    const destination = path.join(root, 'EasyMark Notes')
+    await fs.promises.mkdir(path.join(legacy, 'assets'), { recursive: true })
+    await fs.promises.mkdir(path.join(destination, 'assets'), { recursive: true })
+    await fs.promises.writeFile(path.join(legacy, 'note.md'), '![legacy](assets/image.png)')
+    await fs.promises.writeFile(path.join(legacy, 'assets', 'image.png'), Buffer.from([1, 2, 3]))
+    await fs.promises.writeFile(path.join(destination, 'assets', 'image.png'), Buffer.from([9, 8, 7]))
+    const versionId = await writeLegacyVersion(legacy, 'note.md', '![old](assets/image.png)')
+
+    const report = await migrateLegacyStorage({ legacyRoot: legacy, destinationRoot: destination, maxNoteBytes: 1024 })
+
+    assert.equal(report.copiedAssets, 1)
+    assert.equal(await fs.promises.readFile(path.join(destination, 'note.md'), 'utf8'), '![legacy](assets/image-imported.png)')
+    assert.deepEqual(await fs.promises.readFile(path.join(destination, 'assets', 'image.png')), Buffer.from([9, 8, 7]))
+    assert.deepEqual(await fs.promises.readFile(path.join(destination, 'assets', 'image-imported.png')), Buffer.from([1, 2, 3]))
+    assert.equal(
+      await fs.promises.readFile(path.join(destination, '.history', historyKey('note.md'), versionId), 'utf8'),
+      '![old](assets/image-imported.png)',
+    )
+  })
+})
+
 test('rejects a symbolic-link legacy history root', async t => {
   if (process.platform === 'win32') return t.skip('symbolic link permissions vary on Windows')
   await withTemporaryDirectory(async root => {

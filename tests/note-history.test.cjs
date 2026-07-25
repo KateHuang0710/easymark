@@ -121,3 +121,14 @@ test('rejects a symbolic-link history root', async t => {
     await fs.promises.rm(root, { recursive: true, force: true })
   }
 })
+
+test('surfaces malformed recognized version entries instead of hiding them', async () => {
+  await withHistory(async historyRoot => {
+    const created = await createVersion(historyRoot, 'notes.md', 'valid', MAX_BYTES)
+    const directory = path.join(historyRoot, historyKey('notes.md'))
+    await fs.promises.mkdir(path.join(directory, `${Date.now()}-00000000-0000-4000-8000-000000000000.md`))
+
+    await assert.rejects(() => listVersions(historyRoot, 'notes.md', MAX_BYTES), /Invalid note version/)
+    assert.equal(await readVersion(historyRoot, 'notes.md', created.id, MAX_BYTES), 'valid')
+  })
+})

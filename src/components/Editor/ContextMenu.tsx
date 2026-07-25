@@ -83,7 +83,8 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 export function useEditorContextMenu(
   editorRef: React.RefObject<HTMLDivElement | null>,
   execFormat: (cmd: string, val?: string) => void,
-  insertMarkdown: (before: string, after?: string) => void,
+  insertInlineCode: () => void,
+  insertLink: (url: string) => boolean,
   emitChange: () => void,
   openSearch: () => void
 ) {
@@ -205,7 +206,7 @@ export function useEditorContextMenu(
         id: 'code',
         label: tr.editor.inlineCode || 'Inline code',
         shortcut: 'Ctrl+Shift+`',
-        action: () => insertMarkdown('`', '`'),
+        action: insertInlineCode,
       },
       { id: 'div2', label: '', action: () => {}, divider: true },
       {
@@ -234,20 +235,7 @@ export function useEditorContextMenu(
         action: () => {
           const url = prompt('Enter URL:', 'https://')
           if (url) {
-            const text = hasSelection() ? window.getSelection()!.toString() : 'link'
-            const sel2 = window.getSelection()
-            if (sel2 && sel2.rangeCount) {
-              const range = sel2.getRangeAt(0)
-              range.deleteContents()
-              const textNode = document.createTextNode(`[${text}](${url})`)
-              range.insertNode(textNode)
-              const newRange = document.createRange()
-              newRange.setStartAfter(textNode)
-              newRange.collapse(true)
-              sel2.removeAllRanges()
-              sel2.addRange(newRange)
-              emitChange()
-            }
+            insertLink(url)
           }
         },
       },
@@ -287,7 +275,7 @@ export function useEditorContextMenu(
     ]
 
     setMenu({ x: e.clientX, y: e.clientY, items })
-  }, [execFormat, insertMarkdown, emitChange, openSearch, editorRef])
+  }, [execFormat, insertInlineCode, insertLink, emitChange, openSearch, editorRef])
 
   return { menu, handleContextMenu, closeMenu }
 }

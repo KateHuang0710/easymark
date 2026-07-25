@@ -83,7 +83,7 @@ async function hasHistory(historyRoot, filename) {
   return Boolean(state?.isDirectory() && !state.isSymbolicLink())
 }
 
-async function copyHistory(sourceRoot, destinationRoot, sourceFilename, destinationFilename, maxBytes) {
+async function copyHistory(sourceRoot, destinationRoot, sourceFilename, destinationFilename, maxBytes, rewriteContent) {
   const source = path.join(sourceRoot, historyKey(sourceFilename))
   const sourceState = await pathState(source)
   if (!sourceState) return 0
@@ -104,7 +104,7 @@ async function copyHistory(sourceRoot, destinationRoot, sourceFilename, destinat
     const { data } = await readRegularFile(path.join(source, entry.name), maxBytes)
     const target = path.join(destination, entry.name)
     try {
-      await writeExclusive(target, data)
+      await writeExclusive(target, rewriteContent(data))
       copied += 1
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error
@@ -113,29 +113,61 @@ async function copyHistory(sourceRoot, destinationRoot, sourceFilename, destinat
   return copied
 }
 
+async function chooseAssetDestination(destinationRoot, sourceFilename, data, maxAssetBytes) {
+  const extension = path.extname(sourceFilename)
+  const basename = path.basename(sourceFilename, extension)
+  let counter = 0
+  while (true) {
+    const suffix = counter === 0 ? '' : counter === 1 ? '-imported' : `-imported-${counter - 1}`
+    const filename = `${basename}${suffix}${extension}`
+    const target = path.join(destinationRoot, filename)
+    const state = await pathState(target)
+    if (!state) {
+      try {
+        await writeExclusive(target, data)
+        return { filename, copied: true }
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        continue
+      }
+    }
+    if (state.isFile() && !state.isSymbolicLink() && state.size <= maxAssetBytes) {
+      const existing = await readRegularFile(target, maxAssetBytes)
+      if (existing.data.equals(data)) return { filename, copied: false }
+    }
+    counter += 1
+  }
+}
+
 async function copyAssets(sourceRoot, destinationRoot, maxAssetBytes) {
   const source = path.join(sourceRoot, 'assets')
   const sourceState = await pathState(source)
-  if (!sourceState) return 0
+  if (!sourceState) return { copied: 0, renamed: new Map() }
   if (!sourceState.isDirectory() || sourceState.isSymbolicLink()) throw new Error('Invalid legacy assets directory')
   await ensureRegularDirectory(destinationRoot, 'assets directory')
 
   const entries = await fs.promises.readdir(source, { withFileTypes: true })
   let copied = 0
+  const renamed = new Map()
   for (const entry of entries) {
     if (!entry.isFile() || !SUPPORTED_ASSET.test(entry.name) || path.basename(entry.name) !== entry.name) continue
     const { data } = await readRegularFile(path.join(source, entry.name), maxAssetBytes)
-    const target = path.join(destinationRoot, entry.name)
-    const targetState = await pathState(target)
-    if (targetState) continue
-    try {
-      await writeExclusive(target, data)
-      copied += 1
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error
-    }
+    const destination = await chooseAssetDestination(destinationRoot, entry.name, data, maxAssetBytes)
+    if (destination.copied) copied += 1
+    if (destination.filename !== entry.name) renamed.set(entry.name, destination.filename)
   }
-  return copied
+  return { copied, renamed }
+}
+
+function rewriteAssetReferences(data, renamedAssets) {
+  if (!renamedAssets.size) return data
+  let content = data.toString('utf8')
+  for (const [source, destination] of renamedAssets) {
+    content = content
+      .split(`assets/${source}`).join(`assets/${destination}`)
+      .split(`assets/${encodeURIComponent(source)}`).join(`assets/${encodeURIComponent(destination)}`)
+  }
+  return Buffer.from(content, 'utf8')
 }
 
 function isDedicatedLegacyEntry(entry) {
@@ -184,6 +216,7 @@ async function migrateLegacyStorage({
     report.contaminatedLegacyDirectory = entries.some(entry => !isDedicatedLegacyEntry(entry))
     const legacyHistoryRoot = path.join(legacyRoot, '.history')
 
+    const notesToMigrate = []
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue
       const source = resolveNotePath(legacyRoot, entry.name)
@@ -195,7 +228,19 @@ async function migrateLegacyStorage({
         report.skippedMarkdown.push(entry.name)
         continue
       }
-      const destination = await chooseDestinationFilename(destinationRoot, entry.name, data, maxNoteBytes)
+      notesToMigrate.push({ entry, data })
+    }
+
+    let renamedAssets = new Map()
+    if (notesToMigrate.length) {
+      const assetReport = await copyAssets(legacyRoot, path.join(destinationRoot, 'assets'), maxAssetBytes)
+      report.copiedAssets = assetReport.copied
+      renamedAssets = assetReport.renamed
+    }
+    const rewriteContent = data => rewriteAssetReferences(data, renamedAssets)
+
+    for (const { entry, data } of notesToMigrate) {
+      const destination = await chooseDestinationFilename(destinationRoot, entry.name, rewriteContent(data), maxNoteBytes)
       report.migratedNotes.push(destination.filename)
       report.copiedVersions += await copyHistory(
         legacyHistoryRoot,
@@ -203,10 +248,8 @@ async function migrateLegacyStorage({
         entry.name,
         destination.filename,
         maxNoteBytes,
+        rewriteContent,
       )
-    }
-    if (report.migratedNotes.length) {
-      report.copiedAssets = await copyAssets(legacyRoot, path.join(destinationRoot, 'assets'), maxAssetBytes)
     }
   }
 
