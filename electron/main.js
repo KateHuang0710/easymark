@@ -50,6 +50,7 @@ const AI_CONFIG_FILENAME = 'ai-config.json'
 const DEFAULT_AI_URL = 'https://api.openai.com/v1'
 const DEFAULT_AI_MODEL = 'gpt-4o-mini'
 let aiConfig = { apiUrl: DEFAULT_AI_URL, model: DEFAULT_AI_MODEL, apiKey: '' }
+let encryptedAIKey = ''
 
 function validateAIUrl(rawUrl) {
   if (typeof rawUrl !== 'string' || rawUrl.length > 2048) throw new Error('Invalid AI API URL')
@@ -78,12 +79,17 @@ function aiConfigPath() {
 
 async function persistAIConfig(config) {
   const payload = { apiUrl: config.apiUrl, model: config.model }
-  if (config.apiKey && safeStorage.isEncryptionAvailable()) {
-    payload.encryptedApiKey = safeStorage.encryptString(config.apiKey).toString('base64')
+  let nextEncryptedAIKey = encryptedAIKey
+  if (config.apiKey) {
+    nextEncryptedAIKey = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(config.apiKey).toString('base64')
+      : ''
   }
+  if (nextEncryptedAIKey) payload.encryptedApiKey = nextEncryptedAIKey
   const target = aiConfigPath()
   await fs.promises.mkdir(path.dirname(target), { recursive: true })
   await writeFileAtomically(target, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 })
+  encryptedAIKey = nextEncryptedAIKey
 }
 
 async function loadAIConfig() {
@@ -91,22 +97,40 @@ async function loadAIConfig() {
     const raw = JSON.parse(await fs.promises.readFile(aiConfigPath(), 'utf8'))
     const apiUrl = validateAIUrl(raw.apiUrl || DEFAULT_AI_URL)
     const model = validateAIModel(raw.model || DEFAULT_AI_MODEL)
-    let apiKey = ''
-    if (raw.encryptedApiKey && safeStorage.isEncryptionAvailable()) {
-      apiKey = safeStorage.decryptString(Buffer.from(raw.encryptedApiKey, 'base64'))
-    }
-    aiConfig = { apiUrl, model, apiKey }
+    encryptedAIKey = typeof raw.encryptedApiKey === 'string'
+      && raw.encryptedApiKey.length <= 16384
+      && /^[A-Za-z0-9+/]+={0,2}$/.test(raw.encryptedApiKey)
+      ? raw.encryptedApiKey
+      : ''
+    // Decrypt lazily when an AI request actually needs the key. macOS Keychain
+    // authorization can block for many seconds after the app is re-signed.
+    aiConfig = { apiUrl, model, apiKey: '' }
   } catch (error) {
     if (error?.code !== 'ENOENT') console.error('Failed to load AI configuration:', error)
   }
 }
 
+async function ensureAIKeyLoaded() {
+  if (aiConfig.apiKey) return
+  if (!encryptedAIKey) throw new Error('AI is not configured')
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is unavailable')
+  try {
+    aiConfig = {
+      ...aiConfig,
+      apiKey: safeStorage.decryptString(Buffer.from(encryptedAIKey, 'base64')),
+    }
+  } catch (error) {
+    console.error('Failed to unlock AI API key:', error)
+    throw new Error('The stored AI API key could not be unlocked. Enter it again in Settings.')
+  }
+}
+
 function publicAIConfig() {
   return {
-    configured: Boolean(aiConfig.apiKey),
+    configured: Boolean(aiConfig.apiKey || encryptedAIKey),
     apiUrl: aiConfig.apiUrl,
     model: aiConfig.model,
-    persistedSecurely: !aiConfig.apiKey || safeStorage.isEncryptionAvailable(),
+    persistedSecurely: !(aiConfig.apiKey || encryptedAIKey) || safeStorage.isEncryptionAvailable(),
   }
 }
 
@@ -324,12 +348,14 @@ function createWindow() {
     closeHandshakeTimer = setTimeout(() => {
       closeHandshakePending = false
       closeHandshakeTimer = null
-      appQuitRequested = false
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.show()
-        mainWindow.focus()
+      allowWindowClose = true
+      console.error('Renderer did not finish saving in time; forcing EasyMark to close.')
+      if (appQuitRequested) {
+        app.exit(0)
+      } else {
+        appQuitRequested = false
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy()
       }
-      console.error('Close was cancelled because the renderer did not finish saving in time.')
     }, 10_000)
   })
   mainWindow.on('closed', () => {
@@ -759,7 +785,7 @@ ipcMain.handle('ai:configure', async (event, rawConfig) => {
   const nextModel = validateAIModel(rawConfig.model || aiConfig.model)
   const suppliedKey = typeof rawConfig.apiKey === 'string' ? rawConfig.apiKey.trim() : ''
   if (suppliedKey.length > 4096) throw new Error('Invalid API key')
-  if (!suppliedKey && aiConfig.apiKey && new URL(nextUrl).origin !== new URL(aiConfig.apiUrl).origin) {
+  if (!suppliedKey && (aiConfig.apiKey || encryptedAIKey) && new URL(nextUrl).origin !== new URL(aiConfig.apiUrl).origin) {
     throw new Error('Enter the API key again when changing providers')
   }
   const nextConfig = { apiUrl: nextUrl, model: nextModel, apiKey: suppliedKey || aiConfig.apiKey }
@@ -771,6 +797,7 @@ ipcMain.handle('ai:configure', async (event, rawConfig) => {
 ipcMain.handle('ai:clearKey', async event => {
   assertTrustedSender(event)
   const nextConfig = { ...aiConfig, apiKey: '' }
+  encryptedAIKey = ''
   await persistAIConfig(nextConfig)
   aiConfig = nextConfig
   return publicAIConfig()
@@ -779,6 +806,7 @@ ipcMain.handle('ai:clearKey', async event => {
 ipcMain.handle('ai:listModels', async event => {
   assertTrustedSender(event)
   try {
+    await ensureAIKeyLoaded()
     const response = await createAIClient().models.list()
     return response.data.map(model => model.id).filter(id => typeof id === 'string').slice(0, 1000)
   } catch (error) {
@@ -792,6 +820,7 @@ ipcMain.handle('ai:chat', async (event, rawMessages, rawOptions) => {
   const maxTokens = Number.isInteger(rawOptions?.maxTokens) ? Math.min(Math.max(rawOptions.maxTokens, 1), 4096) : 200
   const temperature = typeof rawOptions?.temperature === 'number' ? Math.min(Math.max(rawOptions.temperature, 0), 2) : 0.7
   try {
+    await ensureAIKeyLoaded()
     const response = await createAIClient().chat.completions.create({
       model: aiConfig.model,
       messages,
