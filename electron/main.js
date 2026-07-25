@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, session, saf
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
+const { spawnSync } = require('child_process')
 const OpenAI = require('openai').default
 const { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer, PageNumber, TableCell, TableRow, Table, LevelFormat, AlignmentType } = require('docx')
 const {
@@ -22,6 +23,19 @@ const { ensureRegularDirectory } = require('./safe-directory')
 const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
 const { renameFileCaseSafely } = require('./case-rename')
+const { isAdHocCodeSignature } = require('./signing')
+
+function shouldUseMockKeychain() {
+  if (process.platform !== 'darwin' || !app.isPackaged) return false
+  const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', process.execPath], {
+    encoding: 'utf8',
+    timeout: 2_000,
+  })
+  return isAdHocCodeSignature(`${result.stdout || ''}\n${result.stderr || ''}`)
+}
+
+const usingMockKeychain = shouldUseMockKeychain()
+if (usingMockKeychain) app.commandLine.appendSwitch('use-mock-keychain')
 
 protocol.registerSchemesAsPrivileged([{
   scheme: 'easymark-asset',
@@ -52,6 +66,10 @@ const DEFAULT_AI_MODEL = 'gpt-4o-mini'
 let aiConfig = { apiUrl: DEFAULT_AI_URL, model: DEFAULT_AI_MODEL, apiKey: '' }
 let encryptedAIKey = ''
 
+function secureCredentialStorageAvailable() {
+  return !usingMockKeychain && safeStorage.isEncryptionAvailable()
+}
+
 function validateAIUrl(rawUrl) {
   if (typeof rawUrl !== 'string' || rawUrl.length > 2048) throw new Error('Invalid AI API URL')
   let parsed
@@ -81,7 +99,7 @@ async function persistAIConfig(config) {
   const payload = { apiUrl: config.apiUrl, model: config.model }
   let nextEncryptedAIKey = encryptedAIKey
   if (config.apiKey) {
-    nextEncryptedAIKey = safeStorage.isEncryptionAvailable()
+    nextEncryptedAIKey = secureCredentialStorageAvailable()
       ? safeStorage.encryptString(config.apiKey).toString('base64')
       : ''
   }
@@ -97,7 +115,8 @@ async function loadAIConfig() {
     const raw = JSON.parse(await fs.promises.readFile(aiConfigPath(), 'utf8'))
     const apiUrl = validateAIUrl(raw.apiUrl || DEFAULT_AI_URL)
     const model = validateAIModel(raw.model || DEFAULT_AI_MODEL)
-    encryptedAIKey = typeof raw.encryptedApiKey === 'string'
+    encryptedAIKey = secureCredentialStorageAvailable()
+      && typeof raw.encryptedApiKey === 'string'
       && raw.encryptedApiKey.length <= 16384
       && /^[A-Za-z0-9+/]+={0,2}$/.test(raw.encryptedApiKey)
       ? raw.encryptedApiKey
@@ -113,7 +132,7 @@ async function loadAIConfig() {
 async function ensureAIKeyLoaded() {
   if (aiConfig.apiKey) return
   if (!encryptedAIKey) throw new Error('AI is not configured')
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure credential storage is unavailable')
+  if (!secureCredentialStorageAvailable()) throw new Error('Secure credential storage is unavailable')
   try {
     aiConfig = {
       ...aiConfig,
@@ -130,7 +149,7 @@ function publicAIConfig() {
     configured: Boolean(aiConfig.apiKey || encryptedAIKey),
     apiUrl: aiConfig.apiUrl,
     model: aiConfig.model,
-    persistedSecurely: !(aiConfig.apiKey || encryptedAIKey) || safeStorage.isEncryptionAvailable(),
+    persistedSecurely: !(aiConfig.apiKey || encryptedAIKey) || secureCredentialStorageAvailable(),
   }
 }
 
@@ -791,7 +810,7 @@ ipcMain.handle('ai:configure', async (event, rawConfig) => {
   const nextConfig = { apiUrl: nextUrl, model: nextModel, apiKey: suppliedKey || aiConfig.apiKey }
   await persistAIConfig(nextConfig)
   aiConfig = nextConfig
-  return { ...publicAIConfig(), persistedSecurely: !aiConfig.apiKey || safeStorage.isEncryptionAvailable() }
+  return publicAIConfig()
 })
 
 ipcMain.handle('ai:clearKey', async event => {
