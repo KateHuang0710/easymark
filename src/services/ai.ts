@@ -132,12 +132,15 @@ export function isConfigured(): boolean {
   return connection.configured
 }
 
-export async function fetchModels(): Promise<string[]> {
-  if (!connection.configured) throw new Error('AI not configured')
-  const models = (await window.electronAPI.listAIModels())
+export async function fetchModels(config?: { apiKey?: string; apiUrl?: string }): Promise<string[]> {
+  if (!config?.apiKey?.trim() && !connection.configured) throw new Error('AI not configured')
+  const models = (await window.electronAPI.listAIModels({
+    apiKey: config?.apiKey?.trim() || undefined,
+    apiUrl: config?.apiUrl,
+  }))
     .filter(id => !NON_COMPLETION_PATTERNS.test(id))
     .sort()
-  return models.length > 0 ? models : getDefaultModelsForProvider(connection.apiUrl)
+  return models.length > 0 ? models : getDefaultModelsForProvider(config?.apiUrl || connection.apiUrl)
 }
 
 async function callAI(messages: AIMessage[], maxTokens = 200, temperature = 0.7): Promise<string> {

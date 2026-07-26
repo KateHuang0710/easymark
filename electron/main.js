@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, session, safeStorage } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol, session, safeStorage, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -48,6 +48,7 @@ let allowWindowClose = false
 let closeHandshakePending = false
 let closeHandshakeTimer = null
 let appQuitRequested = false
+let applicationInitialized = false
 let noteMutationQueue = Promise.resolve()
 const legacyNotesDir = path.join(app.getPath('documents'), 'EasyMark')
 const notesDir = path.join(app.getPath('documents'), 'EasyMark Notes')
@@ -57,6 +58,7 @@ const MAX_NOTE_BYTES = 20 * 1024 * 1024
 const MAX_NOTE_VERSIONS = 10
 const MAX_SEARCH_QUERY_LENGTH = 200
 const MAX_EXPORT_HTML_BYTES = 10 * 1024 * 1024
+const MAX_CLIPBOARD_TEXT_BYTES = 20 * 1024 * 1024
 
 const MAX_AI_MESSAGE_BYTES = 100 * 1024
 const MAX_AI_MESSAGES = 50
@@ -172,9 +174,9 @@ function validateAIMessages(rawMessages) {
   return messages
 }
 
-function redactedAIError(error) {
+function redactedAIError(error, secret = aiConfig.apiKey) {
   const raw = error instanceof Error ? error.message : String(error)
-  return aiConfig.apiKey ? raw.split(aiConfig.apiKey).join('[redacted]') : raw
+  return secret ? raw.split(secret).join('[redacted]') : raw
 }
 
 async function ensureNotesDir() {
@@ -388,16 +390,21 @@ function createWindow() {
   mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window-maximized-changed', false))
 }
 
+function showOrCreateMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (applicationInitialized) createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-  })
+  app.on('second-instance', showOrCreateMainWindow)
 }
 
 app.whenReady().then(async () => {
@@ -464,6 +471,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   createApplicationMenu()
+  applicationInitialized = true
   createWindow()
 
   if (migrationError || (migrationReport && !migrationReport.alreadyCompleted && migrationReport.migratedNotes.length)) {
@@ -487,9 +495,7 @@ app.whenReady().then(async () => {
     })
   }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', showOrCreateMainWindow)
 }).catch(error => {
   console.error('Failed to initialize EasyMark:', error)
   app.quit()
@@ -525,6 +531,19 @@ ipcMain.on('app-close-cancelled', event => {
   appQuitRequested = false
   mainWindow?.show()
   mainWindow?.focus()
+})
+
+ipcMain.handle('clipboard:readText', event => {
+  assertTrustedSender(event)
+  return clipboard.readText()
+})
+
+ipcMain.handle('clipboard:writeText', (event, text) => {
+  assertTrustedSender(event)
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_CLIPBOARD_TEXT_BYTES) {
+    throw new Error('Invalid clipboard text')
+  }
+  clipboard.writeText(text)
 })
 
 ipcMain.handle('notes:list', async event => {
@@ -822,14 +841,31 @@ ipcMain.handle('ai:clearKey', async event => {
   return publicAIConfig()
 })
 
-ipcMain.handle('ai:listModels', async event => {
+ipcMain.handle('ai:listModels', async (event, rawConfig) => {
   assertTrustedSender(event)
+  let requestKey = ''
   try {
-    await ensureAIKeyLoaded()
-    const response = await createAIClient().models.list()
+    if (rawConfig != null && (typeof rawConfig !== 'object' || Array.isArray(rawConfig))) {
+      throw new Error('Invalid AI configuration')
+    }
+    const requestUrl = rawConfig?.apiUrl ? validateAIUrl(rawConfig.apiUrl) : aiConfig.apiUrl
+    const suppliedKey = typeof rawConfig?.apiKey === 'string' ? rawConfig.apiKey.trim() : ''
+    if (suppliedKey.length > 4096) throw new Error('Invalid API key')
+
+    if (suppliedKey) {
+      requestKey = suppliedKey
+    } else {
+      if (new URL(requestUrl).origin !== new URL(aiConfig.apiUrl).origin) {
+        throw new Error('Enter the API key again when changing providers')
+      }
+      await ensureAIKeyLoaded()
+      requestKey = aiConfig.apiKey
+    }
+
+    const response = await new OpenAI({ apiKey: requestKey, baseURL: requestUrl }).models.list()
     return response.data.map(model => model.id).filter(id => typeof id === 'string').slice(0, 1000)
   } catch (error) {
-    throw new Error(redactedAIError(error))
+    throw new Error(redactedAIError(error, requestKey))
   }
 })
 

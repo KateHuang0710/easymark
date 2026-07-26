@@ -60,6 +60,8 @@ export interface ElectronAPI {
   onBeforeClose: (callback: () => void) => (() => void)
   confirmClose: () => void
   cancelClose: () => void
+  readClipboardText: () => Promise<string>
+  writeClipboardText: (text: string) => Promise<void>
   listNotes: () => Promise<NoteSummary[]>
   readNote: (filename: string) => Promise<string | null>
   saveNote: (filename: string, content: string) => Promise<boolean>
@@ -78,7 +80,7 @@ export interface ElectronAPI {
   getAIConfig: () => Promise<AIConnectionConfig>
   configureAI: (config: { apiKey?: string; apiUrl: string; model: string }) => Promise<AIConnectionConfig>
   clearAIKey: () => Promise<AIConnectionConfig>
-  listAIModels: () => Promise<string[]>
+  listAIModels: (config?: { apiKey?: string; apiUrl?: string }) => Promise<string[]>
   chatWithAI: (messages: AIMessage[], options?: { maxTokens?: number; temperature?: number }) => Promise<string>
 }
 

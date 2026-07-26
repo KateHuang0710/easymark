@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from '../../i18n'
 import { SearchResult } from '../../types'
+import { segmentSearchMatches } from './searchHighlight'
 
 interface SearchPanelProps {
   visible: boolean
@@ -91,13 +92,10 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
   }, [activeIndex, onClose, onOpenNote, results])
 
   const highlightMatch = (text: string, q: string) => {
-    if (!q.trim()) return text
-    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
-    return parts.map((part, i) =>
-      part.toLowerCase() === q.toLowerCase()
-        ? <mark key={i} className="search-highlight">{part}</mark>
-        : part
+    return segmentSearchMatches(text, q).map((part, i) =>
+      part.matched
+        ? <mark key={i} className="search-highlight">{part.text}</mark>
+        : part.text
     )
   }
 
@@ -151,7 +149,7 @@ export function SearchPanel({ visible, onClose, onOpenNote }: SearchPanelProps) 
             <div className="search-all-item-snippet">{highlightMatch(r.snippet, query)}</div>
             <div className="search-all-item-meta">
               <span>{r.filename}</span>
-              <span>Match: {r.score}</span>
+              <span>{t.editor.searchAllMatch.replace('{count}', String(r.score))}</span>
             </div>
           </div>
         ))}

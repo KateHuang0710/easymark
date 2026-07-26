@@ -9,6 +9,7 @@ import { InlineSuggestion } from './InlineSuggestion'
 import { getInlineCompletion, isConfigured } from '../../services/ai'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SaveStatus } from '../../types'
+import { formatShortcut, formatShortcutLabel, isInlineCodeShortcut } from '../../utils/shortcuts'
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -457,6 +458,7 @@ function selToString(): string {
 
 export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory }: MarkdownEditorProps) {
   const { t } = useTranslation()
+  const shortcutLabel = (label: string) => formatShortcutLabel(label, window.electronAPI.platform)
   const editorRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<Tab>('edit')
   const skipNextRender = useRef(false)
@@ -781,7 +783,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           setViewMode(prev => prev === 'edit' ? 'source' : prev === 'source' ? 'preview' : 'edit')
           return
       }
-      if (e.shiftKey && e.key === '`') {
+      if (isInlineCodeShortcut(e)) {
         e.preventDefault()
         insertInlineCode()
         return
@@ -1143,24 +1145,24 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     <div className="editor-container">
       <div className="editor-toolbar">
         <div className="editor-toolbar-group">
-          <button className="editor-tb-btn" onClick={() => execFormat('bold')} title={t.editor.bold}>
+          <button className="editor-tb-btn" onClick={() => execFormat('bold')} title={shortcutLabel(t.editor.bold)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M15.6 10.79c.97-.67 1.65-1.77 1.65-2.79 0-2.26-1.75-4-4-4H7v14h7.04c2.09 0 3.71-1.7 3.71-3.79 0-1.52-.86-2.82-2.15-3.42zM10 6.5h3c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-3v-3zm3.5 9H10v-3h3.5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5z"/></svg>
           </button>
-          <button className="editor-tb-btn" onClick={() => execFormat('italic')} title={t.editor.italic}>
+          <button className="editor-tb-btn" onClick={() => execFormat('italic')} title={shortcutLabel(t.editor.italic)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4v3h2.21l-3.42 8H6v3h8v-3h-2.21l3.42-8H18V4z"/></svg>
           </button>
-          <button className="editor-tb-btn" onClick={() => execFormat('strikeThrough')} title={t.editor.strikethrough}>
+          <button className="editor-tb-btn" onClick={() => execFormat('strikeThrough')} title={shortcutLabel(t.editor.strikethrough)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 12h12M3 5l3 2M18 5l-3 2M5 19l3-2M19 19l-3-2"/></svg>
           </button>
-          <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={insertInlineCode} title={t.editor.inlineCode}>
+          <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={insertInlineCode} title={shortcutLabel(t.editor.inlineCode)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           </button>
         </div>
         <div className="editor-toolbar-divider" />
         <div className="editor-toolbar-group">
-          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h1')} title={t.editor.heading1}>H1</button>
-          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h2')} title={t.editor.heading2}>H2</button>
-          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h3')} title={t.editor.heading3}>H3</button>
+          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h1')} title={shortcutLabel(t.editor.heading1)}>H1</button>
+          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h2')} title={shortcutLabel(t.editor.heading2)}>H2</button>
+          <button className="editor-tb-btn editor-tb-label" onClick={() => insertBlock('h3')} title={shortcutLabel(t.editor.heading3)}>H3</button>
         </div>
         <div className="editor-toolbar-divider" />
         <div className="editor-toolbar-group">
@@ -1174,7 +1176,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>
           </button>
           <div className="editor-tb-btn-wrap" ref={langPickerRef}>
-            <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={handleCodeBlockClick} title={t.editor.codeBlock}>
+            <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={handleCodeBlockClick} title={shortcutLabel(t.editor.codeBlock)}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <polyline points="9 9 6 12 9 15" />
@@ -1244,7 +1246,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             if (url) {
               insertLink(url)
             }
-          }} title={t.editor.insertLink}>
+          }} title={shortcutLabel(t.editor.insertLink)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
         </div>
@@ -1290,7 +1292,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           <div className="editor-toolbar-divider" />
           <button
             className="editor-mode-btn active"
-            onClick={() => setViewMode('edit')} title={`${t.editor.edit} (Ctrl+/)`}
+            onClick={() => setViewMode('edit')} title={`${t.editor.edit} (${formatShortcut('Ctrl+/', window.electronAPI.platform)})`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -1299,7 +1301,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           </button>
           <button
             className="editor-mode-btn"
-            onClick={() => setViewMode('source')} title={`${t.editor.source} (Ctrl+/)`}
+            onClick={() => setViewMode('source')} title={`${t.editor.source} (${formatShortcut('Ctrl+/', window.electronAPI.platform)})`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
@@ -1307,7 +1309,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           </button>
           <button
             className="editor-mode-btn"
-            onClick={() => setViewMode('preview')} title={`${t.editor.preview} (Ctrl+/)`}
+            onClick={() => setViewMode('preview')} title={`${t.editor.preview} (${formatShortcut('Ctrl+/', window.electronAPI.platform)})`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />

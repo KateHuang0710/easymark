@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from '../../i18n'
+import { formatShortcut } from '../../utils/shortcuts'
 
 interface MenuItem {
   id: string
   label: string
   shortcut?: string
   icon?: React.ReactNode
-  action: () => void
+  action: () => void | Promise<void>
   divider?: boolean
   disabled?: boolean
 }
@@ -67,7 +68,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           <button
             key={item.id}
             className="context-item"
-            onClick={() => { if (!item.disabled) { item.action(); onClose() } }}
+            onClick={() => {
+              if (item.disabled) return
+              void Promise.resolve(item.action()).catch(error => console.error('Context menu action failed:', error))
+              onClose()
+            }}
             disabled={item.disabled}
           >
             {item.icon && <span className="context-icon">{item.icon}</span>}
@@ -104,134 +109,120 @@ export function useEditorContextMenu(
     e.preventDefault()
     const sel = window.getSelection()
     const selected = hasSelection() ? sel!.toString() : ''
+    const selectedRange = sel?.rangeCount && editorRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer)
+      ? sel.getRangeAt(0).cloneRange()
+      : null
     const tr = tRef.current
+    const shortcut = (value: string) => formatShortcut(value, window.electronAPI.platform)
+    const label = (value: string | undefined, fallback: string) => (value || fallback).replace(/ \([^)]*\)$/, '')
 
     const items: MenuItem[] = [
       {
         id: 'cut',
         label: tr.editor.cut || 'Cut',
-        shortcut: 'Ctrl+X',
-        action: () => {
-          if (hasSelection()) {
-            navigator.clipboard.writeText(window.getSelection()!.toString()).catch(() => {})
-            const r = window.getSelection()?.getRangeAt(0)
-            r?.deleteContents()
-            emitChange()
+        shortcut: shortcut('Ctrl+X'),
+        action: async () => {
+          if (!selected || !selectedRange) return
+          await window.electronAPI.writeClipboardText(selected)
+          const currentSelection = window.getSelection()
+          currentSelection?.removeAllRanges()
+          currentSelection?.addRange(selectedRange)
+          editorRef.current?.focus()
+          if (!document.execCommand('delete')) {
+            selectedRange.deleteContents()
+            selectedRange.collapse(true)
+            currentSelection?.removeAllRanges()
+            currentSelection?.addRange(selectedRange)
           }
+          emitChange()
         },
-        disabled: !hasSelection(),
+        disabled: !selected,
       },
       {
         id: 'copy',
         label: tr.editor.copy || 'Copy',
-        shortcut: 'Ctrl+C',
-        action: () => {
-          if (hasSelection()) {
-            navigator.clipboard.writeText(window.getSelection()!.toString()).catch(() => {})
-          }
+        shortcut: shortcut('Ctrl+C'),
+        action: async () => {
+          if (selected) await window.electronAPI.writeClipboardText(selected)
         },
-        disabled: !hasSelection(),
+        disabled: !selected,
       },
       {
         id: 'paste',
         label: tr.editor.paste || 'Paste',
-        shortcut: 'Ctrl+V',
+        shortcut: shortcut('Ctrl+V'),
         action: async () => {
           try {
-            const text = await navigator.clipboard.readText()
-            const sel2 = window.getSelection()
-            if (sel2 && sel2.rangeCount) {
-              const range = sel2.getRangeAt(0)
-              range.deleteContents()
+            const text = await window.electronAPI.readClipboardText()
+            if (!text || !selectedRange) return
+            const currentSelection = window.getSelection()
+            currentSelection?.removeAllRanges()
+            currentSelection?.addRange(selectedRange)
+            editorRef.current?.focus()
+            if (!document.execCommand('insertText', false, text)) {
+              selectedRange.deleteContents()
               const textNode = document.createTextNode(text)
-              range.insertNode(textNode)
-              const newRange = document.createRange()
-              newRange.setStartAfter(textNode)
-              newRange.collapse(true)
-              sel2.removeAllRanges()
-              sel2.addRange(newRange)
-              emitChange()
+              selectedRange.insertNode(textNode)
+              selectedRange.setStartAfter(textNode)
+              selectedRange.collapse(true)
+              currentSelection?.removeAllRanges()
+              currentSelection?.addRange(selectedRange)
             }
-          } catch {
-            // Fallback: if clipboard.readText fails (e.g., missing clipboard-read permission),
-            // try using a temporary textarea for paste
-            try {
-              const ta = document.createElement('textarea')
-              ta.style.position = 'fixed'
-              ta.style.left = '-9999px'
-              document.body.appendChild(ta)
-              ta.focus()
-              document.execCommand('paste')
-              const text = ta.value
-              document.body.removeChild(ta)
-              if (text) {
-                const sel2 = window.getSelection()
-                if (sel2 && sel2.rangeCount) {
-                  const range = sel2.getRangeAt(0)
-                  range.deleteContents()
-                  const textNode = document.createTextNode(text)
-                  range.insertNode(textNode)
-                  const newRange = document.createRange()
-                  newRange.setStartAfter(textNode)
-                  newRange.collapse(true)
-                  sel2.removeAllRanges()
-                  sel2.addRange(newRange)
-                  emitChange()
-                }
-              }
-            } catch {}
+            emitChange()
+          } catch (error) {
+            console.error('Clipboard paste failed:', error)
           }
         },
       },
       { id: 'div1', label: '', action: () => {}, divider: true },
       {
         id: 'bold',
-        label: tr.editor.bold?.replace(/ \(.*\)/, '') || 'Bold',
-        shortcut: 'Ctrl+B',
+        label: label(tr.editor.bold, 'Bold'),
+        shortcut: shortcut('Ctrl+B'),
         action: () => execFormat('bold'),
       },
       {
         id: 'italic',
-        label: tr.editor.italic?.replace(/ \(.*\)/, '') || 'Italic',
-        shortcut: 'Ctrl+I',
+        label: label(tr.editor.italic, 'Italic'),
+        shortcut: shortcut('Ctrl+I'),
         action: () => execFormat('italic'),
       },
       {
         id: 'strikethrough',
-        label: tr.editor.strikethrough || 'Strikethrough',
-        shortcut: '',
+        label: label(tr.editor.strikethrough, 'Strikethrough'),
+        shortcut: shortcut('Alt+Shift+5'),
         action: () => execFormat('strikeThrough'),
       },
       {
         id: 'code',
-        label: tr.editor.inlineCode || 'Inline code',
-        shortcut: 'Ctrl+Shift+`',
+        label: label(tr.editor.inlineCode, 'Inline code'),
+        shortcut: shortcut('Ctrl+Shift+`'),
         action: insertInlineCode,
       },
       { id: 'div2', label: '', action: () => {}, divider: true },
       {
         id: 'heading1',
-        label: tr.editor.heading1 || 'Heading 1',
-        shortcut: 'Ctrl+1',
+        label: label(tr.editor.heading1, 'Heading 1'),
+        shortcut: shortcut('Ctrl+1'),
         action: () => execFormat('formatBlock', 'h1'),
       },
       {
         id: 'heading2',
-        label: tr.editor.heading2 || 'Heading 2',
-        shortcut: 'Ctrl+2',
+        label: label(tr.editor.heading2, 'Heading 2'),
+        shortcut: shortcut('Ctrl+2'),
         action: () => execFormat('formatBlock', 'h2'),
       },
       {
         id: 'heading3',
-        label: tr.editor.heading3 || 'Heading 3',
-        shortcut: 'Ctrl+3',
+        label: label(tr.editor.heading3, 'Heading 3'),
+        shortcut: shortcut('Ctrl+3'),
         action: () => execFormat('formatBlock', 'h3'),
       },
       { id: 'div3', label: '', action: () => {}, divider: true },
       {
         id: 'link',
-        label: tr.editor.insertLink || 'Insert link',
-        shortcut: 'Ctrl+K',
+        label: label(tr.editor.insertLink, 'Insert link'),
+        shortcut: shortcut('Ctrl+K'),
         action: () => {
           const url = prompt('Enter URL:', 'https://')
           if (url) {
@@ -247,15 +238,15 @@ export function useEditorContextMenu(
       },
       {
         id: 'codeblock',
-        label: tr.editor.codeBlock || 'Code block',
-        shortcut: 'Ctrl+Shift+C',
+        label: label(tr.editor.codeBlock, 'Code block'),
+        shortcut: shortcut('Ctrl+Shift+C'),
         action: () => execFormat('formatBlock', 'pre'),
       },
       { id: 'div4', label: '', action: () => {}, divider: true },
       {
         id: 'selectAll',
         label: tr.editor.selectAll || 'Select all',
-        shortcut: 'Ctrl+A',
+        shortcut: shortcut('Ctrl+A'),
         action: () => {
           const range = document.createRange()
           if (editorRef.current) {
@@ -269,7 +260,7 @@ export function useEditorContextMenu(
       {
         id: 'search',
         label: tr.editor.find || 'Find',
-        shortcut: 'Ctrl+F',
+        shortcut: shortcut('Ctrl+F'),
         action: () => openSearch(),
       },
     ]

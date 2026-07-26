@@ -63,4 +63,57 @@ describe('LatestSaveQueue', () => {
     expect(writes).toEqual(['A', 'B'])
     expect(queue.hasWork()).toBe(false)
   })
+
+  it('does not discard pending writes for different files', async () => {
+    const first = deferred()
+    const writes: string[] = []
+    const save = vi.fn((snapshot: SaveSnapshot) => {
+      writes.push(`${snapshot.filename}:${snapshot.content}`)
+      return writes.length === 1 ? first.promise : Promise.resolve()
+    })
+    const queue = new LatestSaveQueue(save)
+
+    queue.enqueue({ filename: 'a.md', content: 'A1' })
+    const flush = queue.flush()
+    queue.enqueue({ filename: 'b.md', content: 'B1' })
+    queue.enqueue({ filename: 'a.md', content: 'A2' })
+
+    first.resolve()
+    await flush
+
+    expect(writes).toEqual(['a.md:A1', 'b.md:B1', 'a.md:A2'])
+    expect(queue.hasWork()).toBe(false)
+  })
+
+  it('keeps other files pending when one file fails', async () => {
+    let failFirstA = true
+    const writes: string[] = []
+    const queue = new LatestSaveQueue(async snapshot => {
+      writes.push(`${snapshot.filename}:${snapshot.content}`)
+      if (snapshot.filename === 'a.md' && failFirstA) {
+        failFirstA = false
+        throw new Error('disk full')
+      }
+    })
+
+    queue.enqueue({ filename: 'a.md', content: 'A' })
+    queue.enqueue({ filename: 'b.md', content: 'B' })
+    await expect(queue.flush()).rejects.toThrow('disk full')
+
+    await queue.flush()
+    expect(writes).toEqual(['a.md:A', 'a.md:A', 'b.md:B'])
+    expect(queue.hasWork()).toBe(false)
+  })
+
+  it('clears pending work only for the requested file', async () => {
+    const writes: string[] = []
+    const queue = new LatestSaveQueue(async snapshot => { writes.push(snapshot.filename) })
+
+    queue.enqueue({ filename: 'a.md', content: 'A' })
+    queue.enqueue({ filename: 'b.md', content: 'B' })
+    queue.clearPending('a.md')
+    await queue.flush()
+
+    expect(writes).toEqual(['b.md'])
+  })
 })

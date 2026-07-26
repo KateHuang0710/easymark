@@ -81,17 +81,17 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
 
   const handleRefreshModels = useCallback(async () => {
     if (!apiKeyDraft.trim() && !aiEnabled) return
-    if (!isValidAIUrl(apiUrlDraft) || !modelDraft.trim()) {
-      setAIError(isZh ? '请输入有效的 API 地址和模型名称' : 'Enter a valid API URL and model name')
+    if (!isValidAIUrl(apiUrlDraft)) {
+      setAIError(isZh ? '请输入有效的 API 地址' : 'Enter a valid API URL')
       return
     }
     setFetchingModels(true)
     setAIError('')
     try {
-      const config = await configureAI(apiKeyDraft.trim() || undefined, apiUrlDraft, modelDraft)
-      setAIConfig({ apiKey: '', apiUrl: config.apiUrl, model: config.model })
-      await refreshAIStatus()
-      const models = await fetchModels()
+      const models = await fetchModels({
+        apiKey: apiKeyDraft.trim() || undefined,
+        apiUrl: apiUrlDraft,
+      })
       setAvailableModels(models)
       // If current model draft is not in the list, keep it as-is (user may have typed a custom model)
       setShowModelDropdown(true)
@@ -103,7 +103,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
       setShowModelDropdown(true)
     }
     setFetchingModels(false)
-  }, [aiEnabled, apiKeyDraft, apiUrlDraft, isZh, modelDraft, refreshAIStatus, setAIConfig])
+  }, [aiEnabled, apiKeyDraft, apiUrlDraft, isZh])
 
   // Update available model suggestions when API URL changes
   useEffect(() => {
@@ -361,7 +361,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
                       </div>
                     )}
                   </div>
-                  <p className="settings-hint">{isZh ? '点击刷新从 API 拉取模型列表，或直接输入模型名称' : 'Click Refresh to fetch models, or type a model name manually'}</p>
+                  <p className="settings-hint">{isZh ? '刷新仅测试当前输入，不会保存 API 设置；也可以直接输入模型名称' : 'Refresh only tests the current input and does not save AI settings; you can also type a model name manually'}</p>
                 </div>
                 <div className="settings-group">
                   <label className="settings-label">{t.ai.inlineCompletion}</label>

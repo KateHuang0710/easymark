@@ -7,6 +7,7 @@ export const en = {
     enableAI: 'Enable AI',
     disableAI: 'Disable AI',
     help: 'Help',
+    settings: 'Settings',
   },
   sidebar: {
     notes: 'Notes',
@@ -72,6 +73,7 @@ export const en = {
     searchAllResults: 'Results',
     searchAllNoResults: 'No results found',
     searchAllFailed: 'Could not search notes',
+    searchAllMatch: 'Matches: {count}',
     aiSuggestion: 'AI Suggestion',
     tabToAccept: 'Tab to accept',
     saving: 'Saving...',

@@ -11,6 +11,7 @@ export const zh: TranslationKeys = {
     enableAI: '开启 AI',
     disableAI: '关闭 AI',
     help: '帮助',
+    settings: '设置',
   },
   sidebar: {
     notes: '笔记',
@@ -76,6 +77,7 @@ export const zh: TranslationKeys = {
     searchAllResults: '搜索结果',
     searchAllNoResults: '未找到结果',
     searchAllFailed: '无法搜索笔记',
+    searchAllMatch: '匹配：{count}',
     aiSuggestion: 'AI 建议',
     tabToAccept: 'Tab 采纳',
     saving: '正在保存…',

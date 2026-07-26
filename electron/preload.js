@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', Object.freeze({
   },
   confirmClose: () => ipcRenderer.send('app-close-confirmed'),
   cancelClose: () => ipcRenderer.send('app-close-cancelled'),
+  readClipboardText: () => ipcRenderer.invoke('clipboard:readText'),
+  writeClipboardText: text => ipcRenderer.invoke('clipboard:writeText', text),
   listNotes: () => ipcRenderer.invoke('notes:list'),
   readNote: filename => ipcRenderer.invoke('notes:read', filename),
   saveNote: (filename, content) => ipcRenderer.invoke('notes:save', filename, content),
@@ -34,6 +36,6 @@ contextBridge.exposeInMainWorld('electronAPI', Object.freeze({
   getAIConfig: () => ipcRenderer.invoke('ai:getConfig'),
   configureAI: config => ipcRenderer.invoke('ai:configure', config),
   clearAIKey: () => ipcRenderer.invoke('ai:clearKey'),
-  listAIModels: () => ipcRenderer.invoke('ai:listModels'),
+  listAIModels: config => ipcRenderer.invoke('ai:listModels', config),
   chatWithAI: (messages, options) => ipcRenderer.invoke('ai:chat', messages, options),
 }))
