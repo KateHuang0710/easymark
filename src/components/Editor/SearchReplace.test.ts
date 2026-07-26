@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from 'vitest'
-import { countOccurrences, createTextRange, findMatchIndex, replaceAllTextMatches, replaceRangeText } from './SearchReplace'
+import { countOccurrences, createTextRange, findMatchIndex, getSearchableText, replaceAllTextMatches, replaceRangeText } from './SearchReplace'
 
 describe('SearchReplace helpers', () => {
   it('moves backwards and wraps around correctly', () => {
@@ -30,6 +30,16 @@ describe('SearchReplace helpers', () => {
 
     expect(replaceAllTextMatches(editor, 'beta', 'done')).toBe(2)
     expect(editor.textContent).toBe('alpha done done')
+  })
+
+  it('ignores non-editable code language labels when searching and replacing', () => {
+    const editor = document.createElement('div')
+    editor.innerHTML = '<pre data-lang="js"><span class="code-lang-label" contenteditable="false">js</span><code>js value</code></pre>'
+
+    expect(getSearchableText(editor)).toBe('js value')
+    expect(replaceAllTextMatches(editor, 'js', 'ts')).toBe(1)
+    expect(editor.querySelector('.code-lang-label')?.textContent).toBe('js')
+    expect(editor.querySelector('code')?.textContent).toBe('ts value')
   })
 
   it('uses the native editing command so a replacement can be undone', () => {

@@ -24,10 +24,17 @@ describe('renderMarkdown security', () => {
     expect(normalizeMarkdownAssetUrl('assets/../secret.png')).toBe('assets/../secret.png')
   })
 
+  it('keeps the rendered language label non-editable', () => {
+    const html = renderMarkdown('```python\nprint(1)\n```')
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    expect(doc.querySelector('.code-lang-label')?.getAttribute('contenteditable')).toBe('false')
+  })
+
   it('hides language labels without losing code language metadata', () => {
     const html = renderMarkdown('```typescript\nconst value = 1\n```', false)
     expect(html).not.toContain('code-lang-label')
     expect(html).toContain('data-lang="typescript"')
+    expect(html).toContain('<code data-lang="typescript"')
     expect(html).toContain('language-typescript')
   })
 })

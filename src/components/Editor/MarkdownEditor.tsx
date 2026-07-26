@@ -19,10 +19,11 @@ const turndown = new TurndownService({
 })
 
 function getCodeBlockLanguage(node: HTMLElement, code: HTMLElement | null): string {
-  const explicitLanguage = node.getAttribute('data-lang')
-  if (explicitLanguage !== null) return explicitLanguage
+  const explicitCodeLanguage = code?.getAttribute('data-lang')
+  if (explicitCodeLanguage !== null && explicitCodeLanguage !== undefined) return explicitCodeLanguage
   const languageClass = Array.from(code?.classList || []).find(className => className.startsWith('language-'))
-  return languageClass?.slice('language-'.length) || ''
+  if (languageClass) return languageClass.slice('language-'.length)
+  return node.getAttribute('data-lang') || ''
 }
 
 turndown.addRule('codeblock', {
@@ -116,8 +117,18 @@ turndown.addRule('table', {
   },
 })
 
+function normalizeListNesting(html: string): string {
+  const container = document.createElement('div')
+  container.innerHTML = html
+  container.querySelectorAll<HTMLElement>('ol > ol, ol > ul, ul > ol, ul > ul').forEach(nestedList => {
+    const previous = nestedList.previousElementSibling
+    if (previous?.tagName === 'LI') previous.appendChild(nestedList)
+  })
+  return container.innerHTML
+}
+
 export function editorHtmlToMarkdown(html: string): string {
-  return turndown.turndown(html)
+  return turndown.turndown(normalizeListNesting(html))
 }
 
 interface MarkdownEditorProps {
@@ -201,6 +212,18 @@ function closestCodeBlock(node: Node | null): HTMLPreElement | null {
   return element?.closest('pre') as HTMLPreElement | null
 }
 
+function getCodeBlockContainer(pre: HTMLPreElement): HTMLElement {
+  const parent = pre.parentElement
+  return parent?.classList.contains('code-block-wrapper') ? parent : pre
+}
+
+function createCodeBlockContainer(pre: HTMLPreElement): HTMLDivElement {
+  const wrapper = document.createElement('div')
+  wrapper.className = 'code-block-wrapper'
+  wrapper.appendChild(pre)
+  return wrapper
+}
+
 function normalizeCodeLanguage(language: string): string {
   return language.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_+#.-]/g, '')
 }
@@ -214,6 +237,7 @@ function setCodeBlockLanguage(pre: HTMLPreElement, language: string, showLabel =
     code.textContent = pre.textContent || '\n'
     pre.replaceChildren(code)
   }
+  code.setAttribute('data-lang', normalizedLanguage)
   Array.from(code.classList).forEach(className => {
     if (className.startsWith('language-')) code!.classList.remove(className)
   })
@@ -258,21 +282,47 @@ export function removeCodeBlockAtSelection(root: HTMLElement | null, selection =
     if (!coversAllContent) return false
   }
 
-  const previous = pre.previousElementSibling
-  const next = pre.nextElementSibling
+  const block = getCodeBlockContainer(pre)
+  const previous = block.previousElementSibling
+  const next = block.nextElementSibling
+  if (typeof document.execCommand === 'function') {
+    const originalRange = activeRange.cloneRange()
+    const replacementRange = document.createRange()
+    replacementRange.selectNode(block)
+    root.focus()
+    selection.removeAllRanges()
+    selection.addRange(replacementRange)
+
+    const applied = previous || next
+      ? document.execCommand('delete')
+      : document.execCommand('insertHTML', false, '<p><br></p>')
+    if (applied) {
+      if (previous?.isConnected) placeCaretAtEnd(previous as HTMLElement, selection)
+      else if (next?.isConnected) placeCaretAtStart(next as HTMLElement, selection)
+      else {
+        const paragraph = root.querySelector<HTMLElement>('p')
+        if (paragraph) placeCaretAtStart(paragraph, selection)
+      }
+      return true
+    }
+
+    selection.removeAllRanges()
+    selection.addRange(originalRange)
+  }
+
   const caretRange = document.createRange()
   if (previous) {
-    pre.remove()
+    block.remove()
     caretRange.selectNodeContents(previous)
     caretRange.collapse(false)
   } else if (next) {
-    pre.remove()
+    block.remove()
     caretRange.selectNodeContents(next)
     caretRange.collapse(true)
   } else {
     const paragraph = document.createElement('p')
     paragraph.appendChild(document.createElement('br'))
-    pre.replaceWith(paragraph)
+    block.replaceWith(paragraph)
     caretRange.setStart(paragraph, 0)
     caretRange.collapse(true)
   }
@@ -369,7 +419,210 @@ export function isCaretAtEndOfElement(element: HTMLElement, range: Range): boole
   const tail = document.createRange()
   tail.setStart(range.endContainer, range.endOffset)
   tail.setEnd(element, element.childNodes.length)
-  return tail.toString().length === 0
+  return !hasMeaningfulNodeContent(tail.cloneContents())
+}
+
+let nativeEditMarkerCounter = 0
+
+function nextNativeEditMarker(prefix: string): { attribute: string; value: string } {
+  nativeEditMarkerCounter += 1
+  return {
+    attribute: 'data-easymark-edit-marker',
+    value: `${prefix}-${nativeEditMarkerCounter}`,
+  }
+}
+
+function placeCaretAtStart(element: HTMLElement, selection = window.getSelection()): void {
+  if (!selection) return
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function placeCaretAtEnd(element: HTMLElement, selection = window.getSelection()): void {
+  if (!selection) return
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.collapse(false)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function getElementPath(root: HTMLElement, element: HTMLElement): number[] | null {
+  if (root === element) return []
+  if (!root.contains(element)) return null
+  const path: number[] = []
+  let current: HTMLElement | null = element
+  while (current && current !== root) {
+    const parentElement: HTMLElement | null = current.parentElement
+    if (!parentElement) return null
+    const index = Array.from(parentElement.children).indexOf(current)
+    if (index < 0) return null
+    path.unshift(index)
+    current = parentElement
+  }
+  return current === root ? path : null
+}
+
+function getElementAtPath(root: HTMLElement, path: number[]): HTMLElement | null {
+  let current: HTMLElement = root
+  for (const index of path) {
+    const child = current.children.item(index)
+    if (!(child instanceof HTMLElement)) return null
+    current = child
+  }
+  return current
+}
+
+interface NativeBlockReplacement {
+  applied: boolean
+  target: HTMLElement | null
+}
+
+function replaceBlockContents(
+  root: HTMLElement | null,
+  block: HTMLElement,
+  replacementHtml: string,
+  selection = window.getSelection(),
+): NativeBlockReplacement {
+  if (!root || !selection?.rangeCount || !root.contains(block) || typeof document.execCommand !== 'function') {
+    return { applied: false, target: null }
+  }
+  const originalRange = selection.getRangeAt(0).cloneRange()
+  const targetPath = getElementPath(root, block)
+  if (!targetPath) return { applied: false, target: null }
+  const replacementRange = document.createRange()
+  replacementRange.selectNode(block)
+  root.focus()
+  selection.removeAllRanges()
+  selection.addRange(replacementRange)
+  if (!document.execCommand('insertHTML', false, replacementHtml)) {
+    selection.removeAllRanges()
+    selection.addRange(originalRange)
+    return { applied: false, target: null }
+  }
+  const inserted = getElementAtPath(root, targetPath)
+  return { applied: true, target: inserted }
+}
+
+export function insertParagraphAfterCodeBlock(
+  root: HTMLElement | null,
+  pre: HTMLPreElement,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection || !root.contains(pre)) return false
+  const block = getCodeBlockContainer(pre)
+  const paragraph = document.createElement('p')
+  paragraph.appendChild(document.createElement('br'))
+  // Chromium keeps the active <code>/<pre> typing style even when a native
+  // command is aimed after the block, which can nest the new paragraph inside
+  // the language label or code element. A direct sibling is structurally safe;
+  // the exit itself changes only the caret, while subsequent native typing
+  // remains independently undoable/redoable.
+  block.parentNode?.insertBefore(paragraph, block.nextSibling)
+  placeCaretAtStart(paragraph, selection)
+  root.focus()
+  return true
+}
+
+export function insertCodeBlockAtSelection(
+  root: HTMLElement | null,
+  language = '',
+  showLabel = true,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount) return false
+  const range = selection.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return false
+  const selectedText = selection.toString()
+  const pre = createCodeBlock(language, selectedText, showLabel)
+  const wrapper = createCodeBlockContainer(pre)
+  const marker = nextNativeEditMarker('code-insert')
+  pre.setAttribute(marker.attribute, marker.value)
+  if (applyNativeEditingCommand(root, 'insertHTML', wrapper.outerHTML)) {
+    const insertedPre = root.querySelector<HTMLPreElement>(`pre[${marker.attribute}="${marker.value}"]`)
+    insertedPre?.removeAttribute(marker.attribute)
+    const code = insertedPre?.querySelector<HTMLElement>('code')
+    if (code) {
+      setCaretByOffset(code, selectedText.length)
+      root.focus()
+    }
+    return Boolean(insertedPre)
+  }
+
+  pre.removeAttribute(marker.attribute)
+  range.deleteContents()
+  range.insertNode(wrapper)
+  const code = pre.querySelector<HTMLElement>('code')!
+  setCaretByOffset(code, selectedText.length)
+  root.focus()
+  return true
+}
+
+export function updateCodeBlockLanguage(
+  root: HTMLElement | null,
+  pre: HTMLPreElement,
+  language: string,
+  showLabel = true,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount || !root.contains(pre)) return false
+  const activeRange = selection.getRangeAt(0)
+  const code = pre.querySelector<HTMLElement>('code')
+  let caretOffset = 0
+  if (code && activeRange.collapsed && code.contains(activeRange.startContainer)) {
+    const beforeCaret = document.createRange()
+    beforeCaret.selectNodeContents(code)
+    beforeCaret.setEnd(activeRange.startContainer, activeRange.startOffset)
+    caretOffset = beforeCaret.toString().length
+  }
+
+  const replacement = pre.cloneNode(true) as HTMLPreElement
+  setCodeBlockLanguage(replacement, language, showLabel)
+  const block = getCodeBlockContainer(pre)
+  let replacementBlock: HTMLElement = replacement
+  if (block !== pre) {
+    replacementBlock = block.cloneNode(true) as HTMLElement
+    replacementBlock.querySelector('pre')?.replaceWith(replacement)
+  }
+  const result = replaceBlockContents(root, block, replacementBlock.outerHTML, selection)
+  if (result.applied) {
+    const insertedCode = result.target?.querySelector<HTMLElement>('code')
+    if (insertedCode) setCaretByOffset(insertedCode, caretOffset)
+    root.focus()
+    return true
+  }
+
+  setCodeBlockLanguage(pre, language, showLabel)
+  if (code) setCaretByOffset(code, caretOffset)
+  root.focus()
+  return true
+}
+
+export function insertParagraphAfterHeading(
+  root: HTMLElement | null,
+  heading: HTMLElement,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount || !root.contains(heading)) return false
+  const activeRange = selection.getRangeAt(0)
+  if (!isCaretAtEndOfElement(heading, activeRange)) return false
+  // Prefer Chromium's native editing transaction so Command/Ctrl+Z can undo
+  // both the paragraph creation and later typing in the expected order.
+  if (applyNativeEditingCommand(root, 'insertParagraph')) return true
+
+  const paragraph = document.createElement('p')
+  paragraph.appendChild(document.createElement('br'))
+  heading.parentNode?.insertBefore(paragraph, heading.nextSibling)
+  const nextRange = document.createRange()
+  nextRange.setStart(paragraph, 0)
+  nextRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(nextRange)
+  root.focus()
+  return true
 }
 
 export function getHistoryShortcut(key: string, shiftKey = false): 'undo' | 'redo' | null {
@@ -377,6 +630,93 @@ export function getHistoryShortcut(key: string, shiftKey = false): 'undo' | 'red
   if (normalizedKey === 'z') return shiftKey ? 'redo' : 'undo'
   if (normalizedKey === 'y') return 'redo'
   return null
+}
+
+export interface TextIndentEdit {
+  value: string
+  selectionStart: number
+  selectionEnd: number
+}
+
+export function applyTextAreaEdit(textarea: HTMLTextAreaElement, edit: TextIndentEdit): boolean {
+  const previousValue = textarea.value
+  if (previousValue === edit.value) {
+    textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd)
+    return false
+  }
+
+  let prefixLength = 0
+  const sharedLength = Math.min(previousValue.length, edit.value.length)
+  while (prefixLength < sharedLength && previousValue[prefixLength] === edit.value[prefixLength]) prefixLength += 1
+
+  let suffixLength = 0
+  while (
+    suffixLength < previousValue.length - prefixLength
+    && suffixLength < edit.value.length - prefixLength
+    && previousValue[previousValue.length - 1 - suffixLength] === edit.value[edit.value.length - 1 - suffixLength]
+  ) suffixLength += 1
+
+  const replacementEnd = previousValue.length - suffixLength
+  const replacement = edit.value.slice(prefixLength, edit.value.length - suffixLength)
+  textarea.focus()
+  textarea.setSelectionRange(prefixLength, replacementEnd)
+  const appliedNatively = typeof document.execCommand === 'function'
+    && document.execCommand('insertText', false, replacement)
+  if (!appliedNatively) {
+    textarea.setRangeText(replacement, prefixLength, replacementEnd, 'end')
+    textarea.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: replacement,
+    }))
+  }
+  textarea.setSelectionRange(edit.selectionStart, edit.selectionEnd)
+  return appliedNatively
+}
+
+export function editTextIndent(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  outdent = false,
+  indent = '    ',
+): TextIndentEdit {
+  const removeIndent = (line: string) => line.replace(new RegExp(`^(?:\\t| {1,${indent.length}})`), '')
+  const lineStart = value.lastIndexOf('\n', Math.max(selectionStart - 1, 0)) + 1
+  if (selectionStart === selectionEnd) {
+    if (!outdent) {
+      return {
+        value: value.slice(0, selectionStart) + indent + value.slice(selectionEnd),
+        selectionStart: selectionStart + indent.length,
+        selectionEnd: selectionEnd + indent.length,
+      }
+    }
+    const currentLine = value.slice(lineStart)
+    const removableLength = currentLine.length - removeIndent(currentLine).length
+    const removable = currentLine.slice(0, removableLength)
+    if (!removable) return { value, selectionStart, selectionEnd }
+    return {
+      value: value.slice(0, lineStart) + value.slice(lineStart + removable.length),
+      selectionStart: Math.max(lineStart, selectionStart - removable.length),
+      selectionEnd: Math.max(lineStart, selectionEnd - removable.length),
+    }
+  }
+
+  const selectionEndsAtLineStart = selectionEnd > selectionStart && value[selectionEnd - 1] === '\n'
+  const effectiveEnd = selectionEndsAtLineStart ? selectionEnd - 1 : selectionEnd
+  const lastLineBreak = value.indexOf('\n', effectiveEnd)
+  const blockEnd = lastLineBreak === -1 ? value.length : lastLineBreak
+  const lines = value.slice(lineStart, blockEnd).split('\n')
+  const transformed = lines.map(line => outdent
+    ? removeIndent(line)
+    : indent + line)
+  const replacement = transformed.join('\n')
+  const nextValue = value.slice(0, lineStart) + replacement + value.slice(blockEnd)
+  return {
+    value: nextValue,
+    selectionStart: lineStart,
+    selectionEnd: lineStart + replacement.length,
+  }
 }
 
 function hasMeaningfulNodeContent(node: ParentNode): boolean {
@@ -396,6 +736,30 @@ export function exitBlockquoteAtSelection(
     : range.startContainer.parentElement
   const blockquote = element?.closest('blockquote') as HTMLQuoteElement | null
   if (!blockquote || !root.contains(blockquote) || !blockquote.parentNode) return false
+
+  if (isCaretAtEndOfElement(blockquote, range) && typeof document.execCommand === 'function') {
+    const replacementRange = document.createRange()
+    replacementRange.selectNode(blockquote)
+    selection.removeAllRanges()
+    selection.addRange(replacementRange)
+    root.focus()
+    const markerAttribute = 'data-easymark-quote-exit'
+    const replacement = `${blockquote.outerHTML}<p ${markerAttribute}="true"><br></p>`
+    if (document.execCommand('insertHTML', false, replacement)) {
+      const paragraph = root.querySelector<HTMLElement>(`[${markerAttribute}]`)
+      paragraph?.removeAttribute(markerAttribute)
+      if (paragraph) {
+        const nextRange = document.createRange()
+        nextRange.setStart(paragraph, 0)
+        nextRange.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(nextRange)
+      }
+      return true
+    }
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
 
   const trailingRange = document.createRange()
   trailingRange.setStart(range.startContainer, range.startOffset)
@@ -442,7 +806,6 @@ export function insertSoftBreakAtSelection(
   root.focus()
   return true
 }
-
 
 function markEditorActive(element: HTMLElement) {
   document.querySelectorAll<HTMLElement>('[data-editor-active="true"]').forEach(active => {
@@ -603,29 +966,16 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   }, [emitChange])
 
   const handleCodeBlockClick = useCallback(() => {
-    // Insert code block immediately with no language
     const sel = window.getSelection()
     if (!sel || !sel.rangeCount) return
     const range = sel.getRangeAt(0)
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
     const existingCodeBlock = closestCodeBlock(range.startContainer)
-    if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) return
-    const selectedText = sel.toString()
-    const pre = createCodeBlock('', selectedText, settings.showCodeLangLabel)
-    const code = pre.querySelector('code')!
-    range.deleteContents()
-    range.insertNode(pre)
-    const newRange = document.createRange()
-    if (selectedText && code.firstChild) {
-      newRange.setStart(code.firstChild, selectedText.length)
-    } else {
-      newRange.setStart(code, 0)
+    if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) {
+      if (insertParagraphAfterCodeBlock(editorRef.current, existingCodeBlock, sel)) emitChange()
+      return
     }
-    newRange.collapse(true)
-    sel.removeAllRanges()
-    sel.addRange(newRange)
-    editorRef.current?.focus()
-    emitChange()
+    if (insertCodeBlockAtSelection(editorRef.current, '', settings.showCodeLangLabel, sel)) emitChange()
   }, [emitChange, settings.showCodeLangLabel])
 
   const toggleLanguagePicker = useCallback(() => {
@@ -652,30 +1002,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
     const existingCodeBlock = closestCodeBlock(range.startContainer)
     if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) {
-      setCodeBlockLanguage(existingCodeBlock, lang, settings.showCodeLangLabel)
-      sel.removeAllRanges()
-      sel.addRange(range)
-      editorRef.current.focus()
-      emitChange()
+      if (updateCodeBlockLanguage(editorRef.current, existingCodeBlock, lang, settings.showCodeLangLabel, sel)) emitChange()
       return
     }
-    const selectedText = sel.toString()
-    const pre = createCodeBlock(lang, selectedText, settings.showCodeLangLabel)
-    const code = pre.querySelector('code')!
-    range.deleteContents()
-    range.insertNode(pre)
-    // Move cursor inside the code block
-    const newRange = document.createRange()
-    if (selectedText && code.firstChild) {
-      newRange.setStart(code.firstChild, selectedText.length)
-    } else {
-      newRange.setStart(code, 0)
-    }
-    newRange.collapse(true)
-    sel.removeAllRanges()
-    sel.addRange(newRange)
-    editorRef.current?.focus()
-    emitChange()
+    if (insertCodeBlockAtSelection(editorRef.current, lang, settings.showCodeLangLabel, sel)) emitChange()
   }, [emitChange, settings.showCodeLangLabel])
 
   const { menu: ctxMenu, handleContextMenu, closeMenu } = useEditorContextMenu(
@@ -790,7 +1120,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
       if (e.shiftKey && shortcutKey === 'c') {
         e.preventDefault()
-        insertBlock('pre')
+        handleCodeBlockClick()
         return
       }
       if (shortcutKey === 'f') {
@@ -814,6 +1144,15 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
     if (e.key === 'Tab') {
       e.preventDefault()
+      const selection = window.getSelection()
+      const anchor = selection?.anchorNode
+      const listItem = anchor?.nodeType === Node.ELEMENT_NODE
+        ? (anchor as HTMLElement).closest('li')
+        : anchor?.parentElement?.closest('li')
+      if (listItem && editorRef.current?.contains(listItem)) {
+        if (applyNativeEditingCommand(editorRef.current, e.shiftKey ? 'outdent' : 'indent')) emitChange()
+        return
+      }
       execFormat('insertText', '    ')
       return
     }
@@ -829,26 +1168,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         if (pre) {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
-            const p = document.createElement('p')
-            p.innerHTML = '<br>'
-            pre.parentNode?.insertBefore(p, pre.nextSibling)
-            const range = document.createRange()
-            range.setStart(p, 0)
-            range.collapse(true)
-            sel.removeAllRanges()
-            sel.addRange(range)
-            emitChange()
+            if (insertParagraphAfterCodeBlock(editorRef.current, pre as HTMLPreElement, sel)) emitChange()
           } else {
             e.preventDefault()
-            const range = sel.getRangeAt(0)
-            range.deleteContents()
-            const br = document.createElement('br')
-            range.insertNode(br)
-            range.setStartAfter(br)
-            range.collapse(true)
-            sel.removeAllRanges()
-            sel.addRange(range)
-            emitChange()
+            if (insertTextAtCursor(editorRef.current, '\n')) emitChange()
           }
           return
         }
@@ -867,7 +1190,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           ? (node as HTMLElement).closest('li')
           : node.parentElement?.closest('li')
         if (li) {
-          emitChange()
+          // Chromium already provides the expected undoable list behavior:
+          // Enter creates the next item, Shift+Enter stays in the same item,
+          // and Enter on an empty item exits the list. Do not serialize during
+          // keydown, because doing so races the native DOM mutation.
           return
         }
         const h = node.nodeType === Node.ELEMENT_NODE
@@ -875,15 +1201,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           : node.parentElement?.closest('h1,h2,h3,h4,h5,h6')
         if (h && isCaretAtEndOfElement(h as HTMLElement, sel.getRangeAt(0))) {
           e.preventDefault()
-          const p = document.createElement('p')
-          p.innerHTML = '<br>'
-          h.parentNode?.insertBefore(p, h.nextSibling)
-          const range = document.createRange()
-          range.setStart(p, 0)
-          range.collapse(true)
-          sel.removeAllRanges()
-          sel.addRange(range)
-          emitChange()
+          if (insertParagraphAfterHeading(editorRef.current, h as HTMLElement, sel)) emitChange()
           return
         }
       }
@@ -898,6 +1216,15 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       const el = node.nodeType === Node.ELEMENT_NODE
         ? (node as HTMLElement).closest('li,p,h1,h2,h3,h4,h5,h6,blockquote,pre')
         : node.parentElement?.closest('li,p,h1,h2,h3,h4,h5,h6,blockquote,pre')
+      if (el instanceof HTMLLIElement) {
+        if (!el.textContent?.trim()) {
+          // Native Backspace merges an empty item into the previous list item.
+          // Outdent instead produces an undoable normal paragraph for body text.
+          e.preventDefault()
+          if (applyNativeEditingCommand(editorRef.current, 'outdent')) emitChange()
+        }
+        return
+      }
       if (el && !el.textContent?.trim()) {
         const parent = el.parentElement
         if (parent) {
@@ -935,7 +1262,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
     }
 
-  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink])
+  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink, handleCodeBlockClick])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items
@@ -1074,12 +1401,9 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       if (e.key === 'Tab') {
         e.preventDefault()
         const ta = e.currentTarget
-        const start = ta.selectionStart
-        const end = ta.selectionEnd
-        const val = ta.value
-        ta.value = val.substring(0, start) + '  ' + val.substring(end)
-        ta.selectionStart = ta.selectionEnd = start + 2
-        onChange(ta.value)
+        const edit = editTextIndent(ta.value, ta.selectionStart, ta.selectionEnd, e.shiftKey)
+        applyTextAreaEdit(ta, edit)
+        if (ta.value !== contentRef.current) onChange(ta.value)
         return
       }
       if ((e.ctrlKey || e.metaKey) && shortcutKey === 's') {

@@ -5,14 +5,20 @@ import {
   addDeferredDocumentMouseDownListener,
   applyBlockFormat,
   applyNativeEditingCommand,
+  applyTextAreaEdit,
+  editTextIndent,
   editorHtmlToMarkdown,
   exitBlockquoteAtSelection,
   getCaretOffset,
   getHistoryShortcut,
+  insertCodeBlockAtSelection,
   insertInlineElement,
+  insertParagraphAfterHeading,
+  insertParagraphAfterCodeBlock,
   insertSoftBreakAtSelection,
   isCaretAtEndOfElement,
   removeCodeBlockAtSelection,
+  updateCodeBlockLanguage,
 } from './MarkdownEditor'
 import { renderMarkdown } from '../../services/markdown'
 
@@ -154,6 +160,11 @@ describe('editorHtmlToMarkdown', () => {
       .toContain('```python\nprint(1)\n```')
   })
 
+  it('treats code metadata as authoritative over stale pre metadata', () => {
+    expect(editorHtmlToMarkdown('<pre data-lang="javascript"><code data-lang="python" class="hljs language-python">print(1)</code></pre>'))
+      .toContain('```python\nprint(1)\n```')
+  })
+
   it('preserves underline markup instead of silently dropping the format', () => {
     expect(editorHtmlToMarkdown('<p><u>important</u></p>')).toBe('<u>important</u>')
   })
@@ -161,6 +172,26 @@ describe('editorHtmlToMarkdown', () => {
   it('preserves semantic inline code and links inserted by the visual editor', () => {
     expect(editorHtmlToMarkdown('<p><code>value</code> and <a href="https://example.com/">site</a></p>'))
       .toBe('`value` and [site](https://example.com/)')
+  })
+
+  it('preserves a same-item line break and following body text in numbered lists', () => {
+    expect(editorHtmlToMarkdown('<ol><li>编号标题<br>编号内正文</li></ol>'))
+      .toBe('1.  编号标题  \n    编号内正文')
+  })
+
+  it('keeps normal body text outside a completed numbered list', () => {
+    expect(editorHtmlToMarkdown('<ol><li>编号标题</li></ol><p>普通正文</p>'))
+      .toBe('1.  编号标题\n\n普通正文')
+  })
+
+  it('keeps body text outside a wrapped code block exit transaction', () => {
+    expect(editorHtmlToMarkdown('<div><pre data-lang="python"><code>value</code></pre><p>BODY</p></div>'))
+      .toBe('```python\nvalue\n```\n\nBODY')
+  })
+
+  it('normalizes Chromium nested-list siblings before saving Markdown', () => {
+    expect(editorHtmlToMarkdown('<ol><li>one</li><ol><li>two</li></ol></ol>'))
+      .toBe('1.  one\n    1.  two')
   })
 })
 
@@ -215,6 +246,54 @@ describe('visual editor selection helpers', () => {
     range.collapse(true)
     expect(isCaretAtEndOfElement(heading, range)).toBe(true)
   })
+
+  it('does not treat a caret before a trailing non-text element as the end', () => {
+    const heading = document.createElement('h1')
+    heading.innerHTML = 'title<img src="x.png" alt="diagram">'
+    document.body.appendChild(heading)
+    const range = document.createRange()
+    range.setStart(heading.firstChild!, 5)
+    range.collapse(true)
+
+    expect(isCaretAtEndOfElement(heading, range)).toBe(false)
+  })
+
+  it('uses an undoable native paragraph command after a heading', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<h3>Heading</h3>'
+    document.body.appendChild(editor)
+    const heading = editor.querySelector('h3')!
+    const range = document.createRange()
+    range.setStart(heading.firstChild!, heading.textContent!.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(insertParagraphAfterHeading(editor, heading, selection)).toBe(true)
+    expect(execCommand).toHaveBeenCalledWith('insertParagraph', false, undefined)
+  })
+
+  it('falls back to a normal paragraph when the native heading command is unavailable', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<h3>Heading</h3>'
+    document.body.appendChild(editor)
+    const heading = editor.querySelector('h3')!
+    const range = document.createRange()
+    range.setStart(heading.firstChild!, heading.textContent!.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: vi.fn(() => false) })
+
+    expect(insertParagraphAfterHeading(editor, heading, selection)).toBe(true)
+    expect(editor.innerHTML).toBe('<h3>Heading</h3><p><br></p>')
+  })
 })
 
 describe('editor history shortcuts', () => {
@@ -223,6 +302,52 @@ describe('editor history shortcuts', () => {
     expect(getHistoryShortcut('Z', true)).toBe('redo')
     expect(getHistoryShortcut('y')).toBe('redo')
     expect(getHistoryShortcut('b')).toBeNull()
+  })
+})
+
+describe('source editor indentation', () => {
+  it('inserts and removes indentation at a collapsed caret', () => {
+    expect(editTextIndent('alpha', 2, 2)).toEqual({
+      value: 'al    pha',
+      selectionStart: 6,
+      selectionEnd: 6,
+    })
+    expect(editTextIndent('    alpha', 4, 4, true)).toEqual({
+      value: 'alpha',
+      selectionStart: 0,
+      selectionEnd: 0,
+    })
+  })
+
+  it('indents and outdents every selected line without deleting the selection', () => {
+    const indented = editTextIndent('one\ntwo\nthree', 1, 7)
+    expect(indented).toEqual({
+      value: '    one\n    two\nthree',
+      selectionStart: 0,
+      selectionEnd: 15,
+    })
+    expect(editTextIndent(indented.value, indented.selectionStart, indented.selectionEnd, true)).toEqual({
+      value: 'one\ntwo\nthree',
+      selectionStart: 0,
+      selectionEnd: 7,
+    })
+  })
+
+  it('applies the smallest native textarea edit so indentation stays undoable', () => {
+    const textarea = document.createElement('textarea')
+    textarea.value = 'one\ntwo'
+    document.body.appendChild(textarea)
+    const execCommand = vi.fn((_command: string, _showUi: boolean, replacement: string) => {
+      textarea.setRangeText(replacement, textarea.selectionStart, textarea.selectionEnd, 'end')
+      return true
+    })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    const edit = editTextIndent(textarea.value, 4, 7)
+    expect(applyTextAreaEdit(textarea, edit)).toBe(true)
+    expect(textarea.value).toBe('one\n    two')
+    expect(execCommand).toHaveBeenCalledWith('insertText', false, '    ')
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([4, 11])
   })
 })
 
@@ -249,6 +374,30 @@ describe('blockquote keyboard behavior', () => {
     expect(exitBlockquoteAtSelection(editor, selection)).toBe(true)
     expect(editor.innerHTML).toBe('<blockquote><p>before</p></blockquote><p><br></p><blockquote><p> after</p></blockquote>')
     expect(selection.anchorNode).toBe(editor.children[1])
+  })
+
+  it('uses one native HTML transaction when exiting at the end', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<blockquote><p>quoted</p></blockquote>'
+    document.body.appendChild(editor)
+    const text = editor.querySelector('p')!.firstChild!
+    const range = document.createRange()
+    range.setStart(text, text.textContent!.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(exitBlockquoteAtSelection(editor, selection)).toBe(true)
+    expect(execCommand).toHaveBeenCalledTimes(1)
+    expect(execCommand).toHaveBeenCalledWith(
+      'insertHTML',
+      false,
+      '<blockquote><p>quoted</p></blockquote><p data-easymark-quote-exit="true"><br></p>',
+    )
   })
 
   it('inserts a soft break inside the current quote', () => {
@@ -324,6 +473,246 @@ describe('removeCodeBlockAtSelection', () => {
     expect(removeCodeBlockAtSelection(editor, selection)).toBe(true)
     expect(editor.querySelector('pre')).toBeNull()
     expect(editor.textContent).toBe('before')
+  })
+
+  it('uses a native replacement for the only code block', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre><code><br></code></pre>'
+    document.body.appendChild(editor)
+    const code = editor.querySelector('code')!
+    const range = document.createRange()
+    range.setStart(code, 0)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = vi.fn((command: string, _showUi: boolean, html?: string) => {
+      if (command !== 'insertHTML' || html === undefined) return false
+      const activeRange = selection.getRangeAt(0)
+      activeRange.deleteContents()
+      const template = document.createElement('template')
+      template.innerHTML = html
+      activeRange.insertNode(template.content)
+      return true
+    })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(removeCodeBlockAtSelection(editor, selection)).toBe(true)
+    expect(editor.innerHTML).toBe('<p><br></p>')
+    expect(execCommand).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('native code-block editing', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+    vi.restoreAllMocks()
+  })
+
+  function emulateInsertHtml(selection: Selection) {
+    return vi.fn((command: string, _showUi: boolean, html?: string) => {
+      if (command === 'defaultParagraphSeparator') return true
+      if (command === 'insertParagraph') {
+        const range = selection.getRangeAt(0)
+        const paragraph = document.createElement('p')
+        paragraph.appendChild(document.createElement('br'))
+        range.insertNode(paragraph)
+        range.setStartAfter(paragraph)
+        range.collapse(true)
+        return true
+      }
+      if (command !== 'insertHTML' || html === undefined) return false
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const template = document.createElement('template')
+      template.innerHTML = html
+      range.insertNode(template.content)
+      return true
+    })
+  }
+
+  function emulateNativeHistory(editor: HTMLElement, selection: Selection) {
+    const history = [editor.innerHTML]
+    let historyIndex = 0
+    return vi.fn((command: string, _showUi?: boolean, html?: string) => {
+      if (command === 'defaultParagraphSeparator') return true
+      if (command === 'insertHTML' && html !== undefined) {
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
+        const template = document.createElement('template')
+        template.innerHTML = html
+        range.insertNode(template.content)
+        history.splice(historyIndex + 1)
+        history.push(editor.innerHTML)
+        historyIndex = history.length - 1
+        return true
+      }
+      if (command === 'insertParagraph') {
+        const range = selection.getRangeAt(0)
+        const paragraph = document.createElement('p')
+        paragraph.appendChild(document.createElement('br'))
+        range.insertNode(paragraph)
+        range.setStartAfter(paragraph)
+        range.collapse(true)
+        history.splice(historyIndex + 1)
+        history.push(editor.innerHTML)
+        historyIndex = history.length - 1
+        return true
+      }
+      if (command === 'undo' && historyIndex > 0) {
+        historyIndex -= 1
+        editor.innerHTML = history[historyIndex]
+        return true
+      }
+      if (command === 'redo' && historyIndex < history.length - 1) {
+        historyIndex += 1
+        editor.innerHTML = history[historyIndex]
+        return true
+      }
+      return false
+    })
+  }
+
+  it('inserts a semantic code block through one native transaction', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<p>code</p>'
+    document.body.appendChild(editor)
+    const range = document.createRange()
+    range.selectNodeContents(editor.querySelector('p')!)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = emulateInsertHtml(selection)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(insertCodeBlockAtSelection(editor, 'typescript', true, selection)).toBe(true)
+    expect(editor.querySelector('pre')?.getAttribute('data-lang')).toBe('typescript')
+    expect(editor.querySelector('code')?.textContent).toBe('code')
+    expect(editor.querySelector('.code-lang-label')?.textContent).toBe('typescript')
+    expect(execCommand).toHaveBeenCalledTimes(1)
+  })
+
+  it('changes language and exits a code block through native replacements', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre data-lang="js"><span class="code-lang-label" contenteditable="false">js</span><code class="hljs language-js">value</code></pre>'
+    document.body.appendChild(editor)
+    const codeText = editor.querySelector('code')!.firstChild!
+    const range = document.createRange()
+    range.setStart(codeText, 3)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = emulateInsertHtml(selection)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    const originalPre = editor.querySelector('pre')!
+    expect(updateCodeBlockLanguage(editor, originalPre, 'python', true, selection)).toBe(true)
+    const updatedPre = editor.querySelector('pre')!
+    expect(updatedPre.getAttribute('data-lang')).toBe('python')
+    expect(updatedPre.querySelector('.code-lang-label')?.textContent).toBe('python')
+    expect(insertParagraphAfterCodeBlock(editor, updatedPre, selection)).toBe(true)
+    expect(editor.querySelector('pre')?.getAttribute('data-lang')).toBe('python')
+    expect(editor.querySelector('p')).not.toBeNull()
+    const insertCalls = execCommand.mock.calls.filter(call => call[0] === 'insertHTML')
+    expect(insertCalls).toHaveLength(1)
+    expect(execCommand.mock.calls.some(call => call[0] === 'insertParagraph')).toBe(false)
+  })
+
+  it('places an exited paragraph outside a wrapped code block', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<div class="code-block-wrapper"><pre data-lang="python"><code data-lang="python" class="hljs language-python">const x = 1</code></pre></div>'
+    document.body.appendChild(editor)
+    const codeText = editor.querySelector('code')!.firstChild!
+    const range = document.createRange()
+    range.setStart(codeText, codeText.textContent!.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = emulateNativeHistory(editor, selection)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(insertParagraphAfterCodeBlock(editor, editor.querySelector('pre')!, selection)).toBe(true)
+    const wrapper = editor.querySelector('.code-block-wrapper')!
+    const paragraph = wrapper.nextElementSibling as HTMLElement
+    expect(paragraph?.tagName).toBe('P')
+    expect(wrapper.querySelector('p')).toBeNull()
+    paragraph.textContent = 'BODY'
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toBe('```python\nconst x = 1\n```\n\nBODY')
+  })
+
+  it('does not invoke Chromium native commands that can nest the exit inside code', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre data-lang="python"><code data-lang="python" class="hljs language-python">const x = 1</code></pre>'
+    document.body.appendChild(editor)
+    const codeText = editor.querySelector('code')!.firstChild!
+    const range = document.createRange()
+    range.setStart(codeText, codeText.textContent!.length)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(insertParagraphAfterCodeBlock(editor, editor.querySelector('pre')!, selection)).toBe(true)
+    expect(execCommand).not.toHaveBeenCalled()
+    expect(editor.querySelector('pre')?.nextElementSibling?.tagName).toBe('P')
+  })
+
+  it('makes language changes undoable without leaving stale metadata', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre data-lang="javascript"><span class="code-lang-label" contenteditable="false">javascript</span><code data-lang="javascript" class="hljs language-javascript">value</code></pre>'
+    document.body.appendChild(editor)
+    const codeText = editor.querySelector('code')!.firstChild!
+    const range = document.createRange()
+    range.setStart(codeText, 2)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = emulateNativeHistory(editor, selection)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(updateCodeBlockLanguage(editor, editor.querySelector('pre')!, 'python', true, selection)).toBe(true)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nvalue\n```')
+    expect(editor.querySelector('code')?.getAttribute('data-lang')).toBe('python')
+
+    expect(document.execCommand('undo')).toBe(true)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```javascript\nvalue\n```')
+    expect(document.execCommand('redo')).toBe(true)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nvalue\n```')
+  })
+
+  it('makes deleting an empty code block undoable', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<pre data-lang=""><code data-lang="" class="hljs"><br></code></pre>'
+    document.body.appendChild(editor)
+    const code = editor.querySelector('code')!
+    const range = document.createRange()
+    range.setStart(code, 0)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    const execCommand = emulateNativeHistory(editor, selection)
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+
+    expect(removeCodeBlockAtSelection(editor, selection)).toBe(true)
+    expect(editor.innerHTML).toBe('<p><br></p>')
+    expect(document.execCommand('undo')).toBe(true)
+    expect(editor.querySelector('pre')).not.toBeNull()
+    expect(document.execCommand('redo')).toBe(true)
+    expect(editor.innerHTML).toBe('<p><br></p>')
   })
 })
 

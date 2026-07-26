@@ -5,6 +5,7 @@ interface Heading {
   level: number
   text: string
   index: number
+  order: number
 }
 
 interface OutlinePanelProps {
@@ -24,7 +25,7 @@ export function OutlinePanel({ content, editorRef, visible, onClose }: OutlinePa
     for (const line of lines) {
       const match = line.match(/^(#{1,6})\s+(.+)$/)
       if (match) {
-        result.push({ level: match[1].length, text: match[2].trim(), index: idx })
+        result.push({ level: match[1].length, text: match[2].trim(), index: idx, order: result.length })
       }
       idx++
     }
@@ -34,23 +35,12 @@ export function OutlinePanel({ content, editorRef, visible, onClose }: OutlinePa
   const scrollToHeading = useCallback((heading: Heading) => {
     if (!editorRef.current) return
     const el = editorRef.current
-    // Find the heading by content matching rather than index mapping,
-    // since markdown blank lines and non-block elements don't map 1:1 to DOM children.
-    const normalizedHeadingText = heading.text.replace(/\s+/g, ' ').toLowerCase().trim()
-    let lineEl: Element | null = null
+    // Use the heading's document order so duplicate heading text jumps to the
+    // correct occurrence rather than always selecting the first match.
+    let lineEl: Element | null = el.querySelectorAll('h1,h2,h3,h4,h5,h6')[heading.order] || null
     const children = el.children
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i]
-      const tag = child.tagName.toLowerCase()
-      if (['h1','h2','h3','h4','h5','h6'].includes(tag)) {
-        const childText = child.textContent?.replace(/\s+/g, ' ').toLowerCase().trim() || ''
-        if (childText === normalizedHeadingText) {
-          lineEl = child
-          break
-        }
-      }
-    }
-    // Fallback: try index-based approach
+    // Fallback for malformed or manually edited DOM that no longer matches the
+    // Markdown heading count.
     if (!lineEl) {
       let blockCount = 0
       for (let i = 0; i < children.length; i++) {

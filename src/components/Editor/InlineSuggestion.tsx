@@ -8,6 +8,19 @@ interface InlineSuggestionProps {
   getSuggestion: (text: string) => Promise<string>
 }
 
+export function hasEnoughInlineCompletionContext(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  const inCodeFence = (trimmed.match(/```/g)?.length || 0) % 2 === 1
+  if (inCodeFence) return (trimmed.split('\n').pop() || '').trim().length >= 3
+
+  const cjkCount = trimmed.match(/[\u3400-\u9fff]/g)?.length || 0
+  const nonCjkWords = trimmed
+    .replace(/[\u3400-\u9fff]/g, ' ')
+    .match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length || 0
+  return cjkCount + nonCjkWords >= 3
+}
+
 export function InlineSuggestion({ editorRef, getTextBeforeCursor, onAccept, enabled, getSuggestion }: InlineSuggestionProps) {
   const [suggestion, setSuggestion] = useState('')
   const [position, setPosition] = useState({ top: 0, left: 0 })
@@ -51,8 +64,7 @@ export function InlineSuggestion({ editorRef, getTextBeforeCursor, onAccept, ena
     if (timerRef.current) clearTimeout(timerRef.current)
     const requestId = ++requestIdRef.current
     timerRef.current = setTimeout(async () => {
-      const words = text.trim().split(/\s+/)
-      if (words.length < 3) return
+      if (!hasEnoughInlineCompletionContext(text)) return
       const lastChar = text.trim().slice(-1)
       if (!/[a-zA-Z\u4e00-\u9fff0-9)}\]>]/.test(lastChar)) return
 

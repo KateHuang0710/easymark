@@ -22,8 +22,26 @@ export function countOccurrences(text: string, query: string): number {
   return count
 }
 
+function searchableTextWalker(root: Node): TreeWalker {
+  return document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      return parent?.closest('.code-lang-label,[contenteditable="false"]')
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT
+    },
+  })
+}
+
+export function getSearchableText(root: Node): string {
+  const walker = searchableTextWalker(root)
+  let text = ''
+  while (walker.nextNode()) text += walker.currentNode.textContent || ''
+  return text
+}
+
 export function createTextRange(root: HTMLElement, start: number, length: number): Range | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const walker = searchableTextWalker(root)
   let traversed = 0
   let startNode: Node | null = null
   let startOffset = 0
@@ -56,7 +74,7 @@ export function createTextRange(root: HTMLElement, start: number, length: number
 
 export function replaceAllTextMatches(root: HTMLElement, query: string, replacement: string): number {
   if (!query) return 0
-  const text = root.textContent || ''
+  const text = getSearchableText(root)
   const lower = text.toLowerCase()
   const needle = query.toLowerCase()
   const matches: number[] = []
@@ -128,7 +146,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
     const editor = editorRef.current
     if (!editor) return
     const updateCount = () => {
-      const count = countOccurrences((editor.textContent || '').toLowerCase(), search.toLowerCase())
+      const count = countOccurrences(getSearchableText(editor).toLowerCase(), search.toLowerCase())
       setMatchCount(count)
       setCurrentIdx(prev => count > 0 ? Math.min(prev || 1, count) : 0)
     }
@@ -141,7 +159,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
   const findNext = useCallback((dir: 1 | -1 = 1) => {
     if (!search || !editorRef.current) return
     const el = editorRef.current
-    const text = el.textContent || ''
+    const text = getSearchableText(el)
     const q = search.toLowerCase()
     const sel = window.getSelection()
     let start = 0
@@ -150,7 +168,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
       const pre = document.createRange()
       pre.selectNodeContents(el)
       pre.setEnd(activeRange.startContainer, activeRange.startOffset)
-      start = pre.toString().length
+      start = getSearchableText(pre.cloneContents()).length
     }
     const selectionMatches = sel?.toString().toLowerCase() === q
     const foundIdx = findMatchIndex(text, search, start, dir, selectionMatches)

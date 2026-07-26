@@ -10,6 +10,9 @@ const LOCAL_ASSET = /^(?:\.\/)?assets\/([^/?#\\]+)$/i
 const SAFE_IMAGE_EXTENSION = /\.(?:png|jpe?g|gif|webp)$/i
 
 DOMPurify.addHook('afterSanitizeAttributes', node => {
+  if (node instanceof Element && node.classList.contains('code-lang-label')) {
+    node.setAttribute('contenteditable', 'false')
+  }
   if (node.tagName?.toLowerCase() !== 'a') return
   const href = node.getAttribute('href') || ''
   if (!href || href.startsWith('#')) {
@@ -75,9 +78,9 @@ renderer.code = (text: string, lang: string) => {
   } else {
     highlighted = escapeHtml(text)
   }
-  const langLabel = language && showCodeLang ? `<span class="code-lang-label">${safeLang}</span>` : ''
+  const langLabel = language && showCodeLang ? `<span class="code-lang-label" contenteditable="false">${safeLang}</span>` : ''
   const languageClass = safeLang ? ` language-${safeLang}` : ''
-  return `<pre data-lang="${safeLang}">${langLabel}<code class="hljs${languageClass}">${highlighted}</code></pre>`
+  return `<div class="code-block-wrapper"><pre data-lang="${safeLang}">${langLabel}<code data-lang="${safeLang}" class="hljs${languageClass}">${highlighted}</code></pre></div>`
 }
 
 renderer.image = (href: string, title: string | null, text: string) => {
