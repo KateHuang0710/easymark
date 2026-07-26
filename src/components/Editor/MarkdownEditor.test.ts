@@ -3,11 +3,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   addDeferredDocumentMouseDownListener,
+  addVisualTableColumn,
+  addVisualTableRow,
+  alignVisualTableColumn,
   applyBlockFormat,
   applyNativeEditingCommand,
   applyTextAreaEdit,
+  createVisualTable,
+  deleteVisualTableColumn,
+  deleteVisualTableRow,
   editTextIndent,
   editorHtmlToMarkdown,
+  expandAllEditorFolds,
   exitBlockquoteAtSelection,
   getCaretOffset,
   getHistoryShortcut,
@@ -15,9 +22,13 @@ import {
   insertInlineElement,
   insertParagraphAfterHeading,
   insertParagraphAfterCodeBlock,
+  insertTableAtSelection,
   insertSoftBreakAtSelection,
   isCaretAtEndOfElement,
+  moveAcrossVisualTable,
   removeCodeBlockAtSelection,
+  toggleHeadingFold,
+  toggleListFold,
   updateCodeBlockLanguage,
 } from './MarkdownEditor'
 import { renderMarkdown } from '../../services/markdown'
@@ -713,6 +724,119 @@ describe('native code-block editing', () => {
     expect(editor.querySelector('pre')).not.toBeNull()
     expect(document.execCommand('redo')).toBe(true)
     expect(editor.innerHTML).toBe('<p><br></p>')
+  })
+})
+
+describe('visual table editing', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    window.getSelection()?.removeAllRanges()
+  })
+
+  it('creates an editable Markdown-compatible table', () => {
+    const table = createVisualTable(3, 3)
+    const cells = table.querySelectorAll('th,td')
+    expect(table.tHead?.rows).toHaveLength(1)
+    expect(table.tBodies.item(0)?.rows).toHaveLength(2)
+    expect(cells).toHaveLength(9)
+    expect(Array.from(table.querySelectorAll('th')).every(cell => cell.querySelector('br'))).toBe(true)
+  })
+
+  it('inserts a table at an empty block and places the caret in its first header', () => {
+    const editor = document.createElement('div')
+    editor.contentEditable = 'true'
+    editor.innerHTML = '<p><br></p>'
+    document.body.appendChild(editor)
+    const paragraph = editor.querySelector('p')!
+    const range = document.createRange()
+    range.setStart(paragraph, 0)
+    range.collapse(true)
+    const selection = window.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    const table = insertTableAtSelection(editor, 3, 2, selection)
+    expect(table).not.toBeNull()
+    expect(editor.firstElementChild).toBe(table)
+    expect(table?.nextElementSibling?.tagName).toBe('P')
+    const anchorElement = selection.anchorNode?.nodeType === Node.ELEMENT_NODE
+      ? selection.anchorNode as Element
+      : selection.anchorNode?.parentElement
+    expect(anchorElement?.closest('th')).toBe(table?.querySelector('th'))
+  })
+
+  it('adds, aligns, and removes rows and columns without breaking Markdown output', () => {
+    const table = createVisualTable(3, 2)
+    const firstHeader = table.querySelector('th')!
+    firstHeader.textContent = 'Name'
+    table.querySelectorAll('th')[1].textContent = 'Value'
+    table.querySelector('tbody td')!.textContent = 'alpha'
+
+    const addedRow = addVisualTableRow(table, table.tBodies.item(0)!.rows.item(0))
+    expect(addedRow.cells).toHaveLength(2)
+    expect(table.tBodies.item(0)?.rows).toHaveLength(3)
+    expect(addVisualTableColumn(table, 0)).toBe(1)
+    expect(Array.from(table.rows).every(row => row.cells.length === 3)).toBe(true)
+    expect(alignVisualTableColumn(table, 1, 'center')).toBe(true)
+    expect(Array.from(table.rows).every(row => row.cells.item(1)?.getAttribute('align') === 'center')).toBe(true)
+    expect(deleteVisualTableColumn(table, 1)).toBe(true)
+    expect(deleteVisualTableRow(table, addedRow)).toBe(true)
+
+    const markdown = editorHtmlToMarkdown(table.outerHTML)
+    expect(markdown).toContain('| Name | Value |')
+    expect(markdown).toContain('| alpha |')
+  })
+
+  it('uses Tab navigation and creates a new row after the final cell', () => {
+    const table = createVisualTable(2, 2)
+    document.body.appendChild(table)
+    const cells = Array.from(table.querySelectorAll<HTMLTableCellElement>('th,td'))
+    const selection = window.getSelection()!
+    const result = moveAcrossVisualTable(table, cells[cells.length - 1], false, selection)
+
+    expect(result.moved).toBe(true)
+    expect(result.changed).toBe(true)
+    expect(table.tBodies.item(0)?.rows).toHaveLength(2)
+    expect(result.cell).toBe(table.tBodies.item(0)?.rows.item(1)?.cells.item(0))
+  })
+})
+
+describe('heading and list folding', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('folds a heading section until the next heading of the same or higher level', () => {
+    const editor = document.createElement('div')
+    editor.innerHTML = '<h2>First</h2><p>A</p><h3>Nested</h3><p>B</p><h2>Second</h2><p>C</p>'
+    document.body.appendChild(editor)
+    const first = editor.querySelector('h2')!
+
+    expect(toggleHeadingFold(first)).toBe(true)
+    expect(first.classList.contains('easymark-heading-folded')).toBe(true)
+    expect(editor.children[1].classList.contains('easymark-fold-hidden')).toBe(true)
+    expect(editor.children[2].classList.contains('easymark-fold-hidden')).toBe(true)
+    expect(editor.children[4].classList.contains('easymark-fold-hidden')).toBe(false)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('## First\n\nA\n\n### Nested\n\nB\n\n## Second')
+
+    expect(toggleHeadingFold(first)).toBe(false)
+    expect(editor.querySelector('.easymark-fold-hidden')).toBeNull()
+  })
+
+  it('folds nested lists and expands every folded block without changing content', () => {
+    const editor = document.createElement('div')
+    editor.innerHTML = '<h2>Section</h2><ul><li>Parent<ul><li>Child</li></ul></li></ul><p>After</p>'
+    document.body.appendChild(editor)
+    const heading = editor.querySelector('h2')!
+    const item = editor.querySelector('li')!
+    const before = editorHtmlToMarkdown(editor.innerHTML)
+
+    expect(toggleListFold(item)).toBe(true)
+    expect(item.classList.contains('easymark-list-folded')).toBe(true)
+    expect(toggleHeadingFold(heading)).toBe(true)
+    expect(expandAllEditorFolds(editor)).toBe(2)
+    expect(editor.querySelector('.easymark-list-folded,.easymark-heading-folded,.easymark-fold-hidden')).toBeNull()
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toBe(before)
   })
 })
 

@@ -147,6 +147,13 @@ interface MarkdownEditorProps {
 }
 
 type Tab = 'edit' | 'source' | 'preview'
+type TableAlignment = 'left' | 'center' | 'right'
+
+interface TableToolState {
+  cell: HTMLTableCellElement
+  top: number
+  left: number
+}
 
 const AUTO_PAIRS: Record<string, string> = {
   '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`',
@@ -378,6 +385,201 @@ function insertTextAtCursor(root: HTMLElement | null, text: string) {
   sel.removeAllRanges()
   sel.addRange(newRange)
   return true
+}
+
+function createEmptyTableCell(tagName: 'th' | 'td'): HTMLTableCellElement {
+  const cell = document.createElement(tagName)
+  cell.appendChild(document.createElement('br'))
+  return cell
+}
+
+export function createVisualTable(rowCount = 3, columnCount = 3): HTMLTableElement {
+  const rows = Math.max(2, Math.min(20, Math.trunc(rowCount) || 3))
+  const columns = Math.max(1, Math.min(12, Math.trunc(columnCount) || 3))
+  const table = document.createElement('table')
+  const head = table.createTHead()
+  const headerRow = head.insertRow()
+  for (let index = 0; index < columns; index++) headerRow.appendChild(createEmptyTableCell('th'))
+  const body = table.createTBody()
+  for (let rowIndex = 1; rowIndex < rows; rowIndex++) {
+    const row = body.insertRow()
+    for (let columnIndex = 0; columnIndex < columns; columnIndex++) row.appendChild(createEmptyTableCell('td'))
+  }
+  return table
+}
+
+function getTopLevelEditorBlock(root: HTMLElement, node: Node): HTMLElement | null {
+  let current = node.nodeType === Node.ELEMENT_NODE ? node as HTMLElement : node.parentElement
+  while (current?.parentElement && current.parentElement !== root) current = current.parentElement
+  return current?.parentElement === root ? current : null
+}
+
+export function insertTableAtSelection(
+  root: HTMLElement | null,
+  rowCount = 3,
+  columnCount = 3,
+  selection = window.getSelection(),
+): HTMLTableElement | null {
+  if (!root || !selection?.rangeCount) return null
+  const range = selection.getRangeAt(0)
+  if (!selectionIsInside(root, range)) return null
+  const table = createVisualTable(rowCount, columnCount)
+  const trailingParagraph = document.createElement('p')
+  trailingParagraph.appendChild(document.createElement('br'))
+  const topLevelBlock = getTopLevelEditorBlock(root, range.startContainer)
+
+  if (topLevelBlock && !hasMeaningfulNodeContent(topLevelBlock)) {
+    topLevelBlock.replaceWith(table, trailingParagraph)
+  } else if (topLevelBlock) {
+    topLevelBlock.parentNode?.insertBefore(table, topLevelBlock.nextSibling)
+    table.parentNode?.insertBefore(trailingParagraph, table.nextSibling)
+  } else {
+    root.append(table, trailingParagraph)
+  }
+
+  const firstCell = table.querySelector<HTMLTableCellElement>('th,td')
+  if (firstCell) placeCaretAtStart(firstCell, selection)
+  root.focus()
+  return table
+}
+
+export function addVisualTableRow(table: HTMLTableElement, activeRow?: HTMLTableRowElement | null): HTMLTableRowElement {
+  const columnCount = Math.max(1, ...Array.from(table.rows).map(row => row.cells.length))
+  let body = table.tBodies.item(0)
+  if (!body) body = table.createTBody()
+  const insertIndex = activeRow?.parentElement === body ? activeRow.sectionRowIndex + 1 : 0
+  const row = body.insertRow(insertIndex)
+  for (let index = 0; index < columnCount; index++) row.appendChild(createEmptyTableCell('td'))
+  return row
+}
+
+export function addVisualTableColumn(table: HTMLTableElement, activeColumnIndex: number): number {
+  const rows = Array.from(table.rows)
+  if (!rows.length) return -1
+  const columnIndex = Math.max(0, activeColumnIndex + 1)
+  rows.forEach(row => {
+    const tagName: 'th' | 'td' = row.parentElement?.tagName === 'THEAD' ? 'th' : 'td'
+    const cell = createEmptyTableCell(tagName)
+    const reference = row.cells.item(columnIndex)
+    if (reference) row.insertBefore(cell, reference)
+    else row.appendChild(cell)
+  })
+  return columnIndex
+}
+
+export function deleteVisualTableRow(table: HTMLTableElement, row: HTMLTableRowElement): boolean {
+  if (!table.contains(row) || row.parentElement?.tagName === 'THEAD') return false
+  row.remove()
+  return true
+}
+
+export function deleteVisualTableColumn(table: HTMLTableElement, columnIndex: number): boolean {
+  const rows = Array.from(table.rows)
+  const columnCount = Math.max(0, ...rows.map(row => row.cells.length))
+  if (columnCount <= 1 || columnIndex < 0 || columnIndex >= columnCount) return false
+  rows.forEach(row => row.cells.item(columnIndex)?.remove())
+  return true
+}
+
+export function alignVisualTableColumn(
+  table: HTMLTableElement,
+  columnIndex: number,
+  alignment: TableAlignment,
+): boolean {
+  if (!table.rows.length || columnIndex < 0) return false
+  let changed = false
+  Array.from(table.rows).forEach(row => {
+    const cell = row.cells.item(columnIndex)
+    if (!cell) return
+    cell.setAttribute('align', alignment)
+    changed = true
+  })
+  return changed
+}
+
+export function deleteVisualTable(
+  root: HTMLElement | null,
+  table: HTMLTableElement,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !root.contains(table)) return false
+  const previous = table.previousElementSibling as HTMLElement | null
+  const next = table.nextElementSibling as HTMLElement | null
+  table.remove()
+  if (!root.children.length) {
+    const paragraph = document.createElement('p')
+    paragraph.appendChild(document.createElement('br'))
+    root.appendChild(paragraph)
+    placeCaretAtStart(paragraph, selection)
+  } else if (next?.isConnected) {
+    placeCaretAtStart(next, selection)
+  } else if (previous?.isConnected) {
+    placeCaretAtEnd(previous, selection)
+  }
+  root.focus()
+  return true
+}
+
+export function moveAcrossVisualTable(
+  table: HTMLTableElement,
+  activeCell: HTMLTableCellElement,
+  backwards = false,
+  selection = window.getSelection(),
+): { moved: boolean; changed: boolean; cell: HTMLTableCellElement | null } {
+  let cells = Array.from(table.querySelectorAll<HTMLTableCellElement>('th,td'))
+  const currentIndex = cells.indexOf(activeCell)
+  if (currentIndex < 0) return { moved: false, changed: false, cell: null }
+  let nextIndex = currentIndex + (backwards ? -1 : 1)
+  let changed = false
+  if (!backwards && nextIndex >= cells.length) {
+    addVisualTableRow(table, table.rows.item(table.rows.length - 1))
+    cells = Array.from(table.querySelectorAll<HTMLTableCellElement>('th,td'))
+    nextIndex = currentIndex + 1
+    changed = true
+  }
+  if (nextIndex < 0 || nextIndex >= cells.length) return { moved: false, changed, cell: null }
+  const nextCell = cells[nextIndex]
+  placeCaretAtStart(nextCell, selection)
+  return { moved: true, changed, cell: nextCell }
+}
+
+function headingLevel(heading: Element): number {
+  return Number(heading.tagName.slice(1)) || 6
+}
+
+export function toggleHeadingFold(heading: HTMLElement): boolean {
+  if (!/^H[1-6]$/.test(heading.tagName)) return false
+  const shouldFold = !heading.classList.contains('easymark-heading-folded')
+  const level = headingLevel(heading)
+  let sibling = heading.nextElementSibling as HTMLElement | null
+  while (sibling) {
+    if (/^H[1-6]$/.test(sibling.tagName) && headingLevel(sibling) <= level) break
+    sibling.classList.toggle('easymark-fold-hidden', shouldFold)
+    sibling = sibling.nextElementSibling as HTMLElement | null
+  }
+  heading.classList.toggle('easymark-heading-folded', shouldFold)
+  heading.setAttribute('aria-expanded', String(!shouldFold))
+  return shouldFold
+}
+
+export function toggleListFold(listItem: HTMLLIElement): boolean {
+  const nestedList = Array.from(listItem.children).find(child => child.matches('ul,ol'))
+  if (!nestedList) return false
+  const shouldFold = !listItem.classList.contains('easymark-list-folded')
+  listItem.classList.toggle('easymark-list-folded', shouldFold)
+  listItem.setAttribute('aria-expanded', String(!shouldFold))
+  return shouldFold
+}
+
+export function expandAllEditorFolds(root: HTMLElement | null): number {
+  if (!root) return 0
+  const folded = root.querySelectorAll<HTMLElement>('.easymark-heading-folded,.easymark-list-folded')
+  root.querySelectorAll<HTMLElement>('.easymark-fold-hidden').forEach(element => element.classList.remove('easymark-fold-hidden'))
+  folded.forEach(element => {
+    element.classList.remove('easymark-heading-folded', 'easymark-list-folded')
+    element.setAttribute('aria-expanded', 'true')
+  })
+  return folded.length
 }
 
 export function insertInlineElement(
@@ -840,8 +1042,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const [outlineVisible, setOutlineVisible] = useState(false)
   const [showLangPicker, setShowLangPicker] = useState(false)
   const [langFilter, setLangFilter] = useState('')
+  const [tableTools, setTableTools] = useState<TableToolState | null>(null)
   const langPickerRef = useRef<HTMLDivElement>(null)
   const langSelectionRef = useRef<Range | null>(null)
+  const editorWrapperRef = useRef<HTMLDivElement>(null)
   const { settings } = useSettings()
 
   const COMMON_LANGS = [
@@ -865,6 +1069,46 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   }, [showLangPicker])
 
   const inlineAiEnabled = isConfigured() && settings.aiInlineCompletion
+
+  const updateTableTools = useCallback((preferredCell?: HTMLTableCellElement | null) => {
+    const root = editorRef.current
+    const wrapper = editorWrapperRef.current
+    if (!root || !wrapper || viewMode !== 'edit' || readOnly) {
+      setTableTools(null)
+      return
+    }
+    const selection = window.getSelection()
+    const activeNode = selection?.rangeCount ? selection.getRangeAt(0).startContainer : null
+    const element = activeNode?.nodeType === Node.ELEMENT_NODE ? activeNode as Element : activeNode?.parentElement
+    const cell = preferredCell || element?.closest('th,td') as HTMLTableCellElement | null
+    if (!cell || !root.contains(cell)) {
+      setTableTools(null)
+      return
+    }
+    const table = cell.closest('table')
+    if (!table) {
+      setTableTools(null)
+      return
+    }
+    const wrapperRect = wrapper.getBoundingClientRect()
+    const tableRect = table.getBoundingClientRect()
+    const toolbarWidth = Math.min(460, Math.max(280, wrapperRect.width - 16))
+    const left = Math.max(8, Math.min(tableRect.left - wrapperRect.left, wrapperRect.width - toolbarWidth - 8))
+    const top = Math.max(8, Math.min(tableRect.top - wrapperRect.top - 38, wrapperRect.height - 42))
+    setTableTools({ cell, top, left })
+  }, [readOnly, viewMode])
+
+  useEffect(() => {
+    if (viewMode !== 'edit') return
+    const handleSelectionChange = () => window.requestAnimationFrame(() => updateTableTools())
+    const handleResize = () => updateTableTools(tableTools?.cell || null)
+    document.addEventListener('selectionchange', handleSelectionChange)
+    window.addEventListener('resize', handleResize)
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [tableTools?.cell, updateTableTools, viewMode])
 
   const getMarkdown = useCallback((): string => {
     if (!editorRef.current) return contentRef.current
@@ -964,6 +1208,63 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     if (inserted) emitChange()
     return inserted
   }, [emitChange])
+
+  const insertTable = useCallback(() => {
+    if (readOnly) return
+    const table = insertTableAtSelection(editorRef.current)
+    if (!table) {
+      editorRef.current?.focus()
+      return
+    }
+    emitChange()
+    const firstCell = table.querySelector<HTMLTableCellElement>('th,td')
+    window.requestAnimationFrame(() => updateTableTools(firstCell))
+  }, [emitChange, readOnly, updateTableTools])
+
+  const runTableAction = useCallback((action: (table: HTMLTableElement, cell: HTMLTableCellElement) => HTMLTableCellElement | null | void) => {
+    if (readOnly) return
+    const cell = tableTools?.cell
+    const table = cell?.closest('table')
+    if (!cell || !table || !editorRef.current?.contains(table)) {
+      setTableTools(null)
+      return
+    }
+    const nextCell = action(table, cell) || cell
+    emitChange()
+    if (nextCell instanceof HTMLTableCellElement && nextCell.isConnected) {
+      placeCaretAtStart(nextCell)
+      editorRef.current?.focus()
+      window.requestAnimationFrame(() => updateTableTools(nextCell))
+    } else {
+      setTableTools(null)
+    }
+  }, [emitChange, readOnly, tableTools?.cell, updateTableTools])
+
+  const handleEditorMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    const heading = target.closest<HTMLElement>('h1,h2,h3,h4,h5,h6')
+    if (heading && editorRef.current?.contains(heading)) {
+      const rect = heading.getBoundingClientRect()
+      const inFoldGutter = event.clientX >= rect.left - 32 && event.clientX <= rect.left - 2
+      if (inFoldGutter || event.altKey) {
+        event.preventDefault()
+        toggleHeadingFold(heading)
+        setTableTools(null)
+        return
+      }
+    }
+    const listItem = target.closest('li') as HTMLLIElement | null
+    if (listItem && editorRef.current?.contains(listItem) && Array.from(listItem.children).some(child => child.matches('ul,ol'))) {
+      const rect = listItem.getBoundingClientRect()
+      const inFoldGutter = event.clientX >= rect.left - 30 && event.clientX <= rect.left - 2
+      if (inFoldGutter || event.altKey) {
+        event.preventDefault()
+        toggleListFold(listItem)
+        setTableTools(null)
+      }
+    }
+  }, [])
 
   const handleCodeBlockClick = useCallback(() => {
     const sel = window.getSelection()
@@ -1146,6 +1447,16 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       e.preventDefault()
       const selection = window.getSelection()
       const anchor = selection?.anchorNode
+      const tableCell = anchor?.nodeType === Node.ELEMENT_NODE
+        ? (anchor as HTMLElement).closest('th,td') as HTMLTableCellElement | null
+        : anchor?.parentElement?.closest('th,td') as HTMLTableCellElement | null
+      const table = tableCell?.closest('table')
+      if (tableCell && table && editorRef.current?.contains(table)) {
+        const result = moveAcrossVisualTable(table, tableCell, e.shiftKey, selection)
+        if (result.changed) emitChange()
+        if (result.cell) window.requestAnimationFrame(() => updateTableTools(result.cell))
+        return
+      }
       const listItem = anchor?.nodeType === Node.ELEMENT_NODE
         ? (anchor as HTMLElement).closest('li')
         : anchor?.parentElement?.closest('li')
@@ -1262,7 +1573,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
     }
 
-  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink, handleCodeBlockClick])
+  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink, handleCodeBlockClick, updateTableTools])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items
@@ -1565,6 +1876,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         </div>
         <div className="editor-toolbar-divider" />
         <div className="editor-toolbar-group">
+          <button className="editor-tb-btn" disabled={readOnly} onMouseDown={e => e.preventDefault()} onClick={insertTable} title={t.editor.insertTable}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M9 4v16M15 4v16"/>
+            </svg>
+          </button>
           <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
             const url = prompt('Enter URL:', 'https://')
             if (url) {
@@ -1572,6 +1888,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             }
           }} title={shortcutLabel(t.editor.insertLink)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </button>
+          <button className="editor-tb-btn" onClick={() => expandAllEditorFolds(editorRef.current)} title={t.editor.expandAllFolds}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="7 8 12 3 17 8"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/>
+            </svg>
           </button>
         </div>
         <div className="editor-toolbar-spacer" />
@@ -1656,7 +1977,58 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           visible={outlineVisible}
           onClose={() => setOutlineVisible(false)}
         />
-        <div className={`editor-content-wrapper ${viewMode === 'edit' ? '' : 'hidden'}`} style={{ position: 'relative' }}>
+        <div ref={editorWrapperRef} className={`editor-content-wrapper ${viewMode === 'edit' ? '' : 'hidden'}`} style={{ position: 'relative' }}>
+        {tableTools && (
+          <div
+            className="table-visual-tools"
+            style={{ top: tableTools.top, left: tableTools.left }}
+            onMouseDown={event => event.preventDefault()}
+          >
+            <button title={t.editor.addTableRow} onClick={() => runTableAction((table, cell) => addVisualTableRow(table, cell.parentElement as HTMLTableRowElement).cells.item(cell.cellIndex))}>+{t.editor.tableRow}</button>
+            <button title={t.editor.addTableColumn} onClick={() => runTableAction((table, cell) => {
+              const index = addVisualTableColumn(table, cell.cellIndex)
+              return (cell.parentElement as HTMLTableRowElement | null)?.cells.item(index) || null
+            })}>+{t.editor.tableColumn}</button>
+            <button
+              title={t.editor.deleteTableRow}
+              disabled={tableTools.cell.parentElement?.parentElement?.tagName === 'THEAD'}
+              onClick={() => runTableAction((table, cell) => {
+                const row = cell.parentElement as HTMLTableRowElement
+                const nextRow = row.nextElementSibling as HTMLTableRowElement | null
+                const previousRow = row.previousElementSibling as HTMLTableRowElement | null
+                const target = nextRow?.cells.item(Math.min(cell.cellIndex, nextRow.cells.length - 1))
+                  || previousRow?.cells.item(Math.min(cell.cellIndex, previousRow.cells.length - 1))
+                  || table.tHead?.rows.item(0)?.cells.item(Math.min(cell.cellIndex, (table.tHead?.rows.item(0)?.cells.length || 1) - 1))
+                return deleteVisualTableRow(table, row) ? target : cell
+              })}
+            >−{t.editor.tableRow}</button>
+            <button
+              title={t.editor.deleteTableColumn}
+              disabled={(tableTools.cell.closest('table')?.rows.item(0)?.cells.length || 0) <= 1}
+              onClick={() => runTableAction((table, cell) => {
+                const targetIndex = Math.max(0, cell.cellIndex - 1)
+                if (!deleteVisualTableColumn(table, cell.cellIndex)) return cell
+                const row = cell.parentElement as HTMLTableRowElement
+                return row.cells.item(Math.min(targetIndex, row.cells.length - 1))
+              })}
+            >−{t.editor.tableColumn}</button>
+            <span className="table-visual-tools-divider" />
+            <button title={t.editor.alignTableLeft} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'left') })}>L</button>
+            <button title={t.editor.alignTableCenter} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'center') })}>C</button>
+            <button title={t.editor.alignTableRight} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'right') })}>R</button>
+            <span className="table-visual-tools-divider" />
+            <button className="table-visual-tools-danger" title={t.editor.deleteTable} onClick={() => {
+              const cell = tableTools.cell
+              const table = cell.closest('table')
+              if (table && deleteVisualTable(editorRef.current, table)) {
+                emitChange()
+                setTableTools(null)
+              }
+            }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+            </button>
+          </div>
+        )}
         <div
           ref={editorRef}
           className="editor-content editor-wysiwyg"
@@ -1664,6 +2036,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           onInput={emitChange}
           onFocus={e => markEditorActive(e.currentTarget)}
           onKeyDown={handleKeyDown}
+          onKeyUp={() => updateTableTools()}
+          onMouseDown={handleEditorMouseDown}
+          onMouseUp={() => updateTableTools()}
+          onScroll={() => updateTableTools(tableTools?.cell || null)}
           onPaste={handlePaste}
           onBlur={handleSave}
           onCompositionStart={handleCompositionStart}
