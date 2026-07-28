@@ -3,6 +3,9 @@ export interface NoteSummary {
   title: string
   filename: string
   lastModified: number
+  pinned?: boolean
+  favorite?: boolean
+  lastOpened?: number
 }
 
 export interface Note extends NoteSummary {
@@ -40,6 +43,31 @@ export interface SearchResult {
   score: number
 }
 
+export interface NoteDocument extends NoteSummary {
+  content: string
+}
+
+export interface BacklinkResult {
+  filename: string
+  title: string
+  snippet: string
+}
+
+export interface GitCommit {
+  hash: string
+  subject: string
+  author: string
+  createdAt: number
+}
+
+export interface GitStatus {
+  available: boolean
+  initialized: boolean
+  dirty: boolean
+  summary: string
+  branch: string
+}
+
 export interface AIConnectionConfig {
   configured: boolean
   apiUrl: string
@@ -75,8 +103,20 @@ export interface ElectronAPI {
   openHelp: (locale: 'en' | 'zh') => Promise<void>
   onMaximizedChanged: (callback: (maximized: boolean) => void) => (() => void)
   searchAllNotes: (query: string) => Promise<SearchResult[]>
+  listNoteDocuments: () => Promise<NoteDocument[]>
+  listBacklinks: (title: string) => Promise<BacklinkResult[]>
+  getPathForFile: (file: File) => string
+  importMarkdownFile: (filePath: string) => Promise<{ filename: string; title: string; content: string }>
+  chooseAndImportMarkdownFile: () => Promise<{ filename: string; title: string; content: string } | null>
   exportPDF: (html: string, title: string) => Promise<string | null>
   exportDOCX: (markdown: string, title: string) => Promise<string | null>
+  shareNote: (title: string, content: string) => Promise<boolean>
+  onMenuCommand: (callback: (command: string) => void) => (() => void)
+  getGitStatus: () => Promise<GitStatus>
+  initializeGit: () => Promise<GitStatus>
+  commitGit: (message: string) => Promise<GitStatus>
+  getGitHistory: () => Promise<GitCommit[]>
+  getGitDiff: () => Promise<string>
   getAIConfig: () => Promise<AIConnectionConfig>
   configureAI: (config: { apiKey?: string; apiUrl: string; model: string }) => Promise<AIConnectionConfig>
   clearAIKey: () => Promise<AIConnectionConfig>

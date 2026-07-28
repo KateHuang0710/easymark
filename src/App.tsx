@@ -15,13 +15,16 @@ import { useNotes } from './hooks/useNotes'
 import { Note, NoteSummary, SaveStatus } from './types'
 import * as storage from './services/storage'
 import { LatestSaveQueue } from './services/latestSaveQueue'
+import { CommandPalette, AppCommand } from './components/CommandPalette'
+import { BacklinksPanel } from './components/BacklinksPanel'
+import { GitPanel } from './components/GitPanel'
 
 function saveErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'Could not save note'
 }
 
 function AppContent() {
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
   const { settings, setTheme, setDualPane } = useSettings()
   const {
     notes,
@@ -39,6 +42,10 @@ function AppContent() {
     autoSave,
     retrySave,
     renameNote,
+    togglePinned,
+    toggleFavorite,
+    importMarkdownFile,
+    chooseAndImportMarkdownFile,
     setCurrentNote,
     replaceCurrentNoteContent,
     flushAutoSave,
@@ -47,6 +54,7 @@ function AppContent() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [aiVisible, setAIVisible] = useState(false)
+  const [aiInitialTab, setAIInitialTab] = useState<'complete' | 'chat' | 'knowledge'>('complete')
   const [settingsVisible, setSettingsVisible] = useState(false)
   const [readingModeActive, setReadingModeActive] = useState(false)
   const [exportVisible, setExportVisible] = useState(false)
@@ -55,6 +63,9 @@ function AppContent() {
   const [secondSaveStatus, setSecondSaveStatus] = useState<SaveStatus>({ state: 'idle' })
   const [historyTarget, setHistoryTarget] = useState<{ pane: 'primary' | 'secondary'; filename: string; title: string } | null>(null)
   const [createRequestId, setCreateRequestId] = useState(0)
+  const [commandPaletteVisible, setCommandPaletteVisible] = useState(false)
+  const [gitPanelVisible, setGitPanelVisible] = useState(false)
+  const [dropActive, setDropActive] = useState(false)
   const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const secondSaveQueueRef = useRef<LatestSaveQueue | null>(null)
   const secondOpenRequestRef = useRef(0)
@@ -180,14 +191,84 @@ function AppContent() {
 
   useEffect(() => {
     const handleGlobalShortcut = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'n') return
-      event.preventDefault()
-      setSidebarCollapsed(false)
-      setCreateRequestId(current => current + 1)
+      if (!(event.ctrlKey || event.metaKey)) return
+      if (event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        setSidebarCollapsed(false)
+        setCreateRequestId(current => current + 1)
+      }
+      if (event.key.toLowerCase() === 'p') {
+        event.preventDefault()
+        setCommandPaletteVisible(true)
+      }
     }
     window.addEventListener('keydown', handleGlobalShortcut)
     return () => window.removeEventListener('keydown', handleGlobalShortcut)
   }, [])
+
+  const handleOpenNoteByFilename = useCallback(async (filename: string) => {
+    const note = allNotes.find(item => item.filename === filename)
+    if (note) await handlePrimaryNoteSelect(note)
+  }, [allNotes, handlePrimaryNoteSelect])
+
+  const handleShareNote = useCallback(async () => {
+    if (!currentNote) return
+    await flushAutoSave()
+    await window.electronAPI.shareNote(currentNote.title, currentNote.content)
+  }, [currentNote, flushAutoSave])
+
+  const runAppCommand = useCallback((command: AppCommand | string) => {
+    switch (command) {
+      case 'new-note':
+        setSidebarCollapsed(false)
+        setCreateRequestId(current => current + 1)
+        break
+      case 'open-markdown':
+        void chooseAndImportMarkdownFile().catch(error => console.error('Failed to import Markdown:', error))
+        break
+      case 'search-all': setSearchAllVisible(true); break
+      case 'toggle-ai': setAIInitialTab('complete'); setAIVisible(true); break
+      case 'ask-notes': setAIInitialTab('knowledge'); setAIVisible(true); break
+      case 'share-note': void handleShareNote().catch(error => console.error('Failed to share note:', error)); break
+      case 'export-note': if (currentNote) { setSettingsVisible(false); setExportVisible(true) }; break
+      case 'git-panel': setGitPanelVisible(true); break
+      case 'toggle-pin': if (currentNote) togglePinned(currentNote.filename); break
+      case 'toggle-favorite': if (currentNote) toggleFavorite(currentNote.filename); break
+      case 'command-palette': setCommandPaletteVisible(true); break
+    }
+  }, [chooseAndImportMarkdownFile, currentNote, handleShareNote, toggleFavorite, togglePinned])
+
+  useEffect(() => window.electronAPI.onMenuCommand(runAppCommand), [runAppCommand])
+
+  useEffect(() => {
+    const handleDragOver = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file')) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+      setDropActive(true)
+    }
+    const handleDragLeave = (event: DragEvent) => {
+      if (!event.relatedTarget) setDropActive(false)
+    }
+    const handleDrop = (event: DragEvent) => {
+      event.preventDefault()
+      setDropActive(false)
+      const file = Array.from(event.dataTransfer?.files || []).find(item => item.name.toLocaleLowerCase().endsWith('.md'))
+      if (!file) return
+      let filePath = ''
+      try { filePath = window.electronAPI.getPathForFile(file) } catch (error) { console.error('Could not resolve dropped Markdown path:', error) }
+      if (!filePath) return
+      void importMarkdownFile(filePath).catch(error => console.error('Failed to import dropped Markdown:', error))
+    }
+    window.addEventListener('dragover', handleDragOver)
+    window.addEventListener('dragleave', handleDragLeave)
+    window.addEventListener('drop', handleDrop)
+    return () => {
+      window.removeEventListener('dragover', handleDragOver)
+      window.removeEventListener('dragleave', handleDragLeave)
+      window.removeEventListener('drop', handleDrop)
+    }
+  }, [importMarkdownFile])
 
   const handleRenameNote = useCallback(async (oldFilename: string, newTitle: string) => {
     secondOpenRequestRef.current += 1
@@ -270,7 +351,7 @@ function AppContent() {
       <TitleBar
         onToggleTheme={() => setTheme(settings.theme === 'dark' ? 'light' : 'dark')}
         onOpenSettings={() => { setExportVisible(false); setSettingsVisible(true) }}
-        onToggleAI={() => setAIVisible(prev => !prev)}
+        onToggleAI={() => { setAIInitialTab('complete'); setAIVisible(prev => !prev) }}
       />
       <div className="app-body">
         <Sidebar
@@ -282,6 +363,8 @@ function AppContent() {
           onNoteCreate={async title => { await handleCreateNote(title) }}
           onNoteDelete={filename => handleDeleteNote(filename)}
           onNoteRename={(filename, title) => handleRenameNote(filename, title)}
+          onTogglePinned={togglePinned}
+          onToggleFavorite={toggleFavorite}
           loading={loading}
           loadError={listError}
           onRetryLoad={refreshList}
@@ -343,18 +426,26 @@ function AppContent() {
               </div>
             </div>
           ) : currentNote ? (
-            <MarkdownEditor
-              content={currentNote.content}
-              onChange={handleContentChange}
-              onSave={handleSave}
-              onSplitRight={handleSplitRight}
-              onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
-              onSearchAll={() => setSearchAllVisible(true)}
-              onReadingMode={settings.readingMode ? handleReadingMode : undefined}
-              saveStatus={saveStatus}
-              onRetrySave={retrySave}
-              onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}
-            />
+            <div className="single-note-workspace">
+              <MarkdownEditor
+                content={currentNote.content}
+                onChange={handleContentChange}
+                onSave={handleSave}
+                onSplitRight={handleSplitRight}
+                onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
+                onSearchAll={() => setSearchAllVisible(true)}
+                onReadingMode={settings.readingMode ? handleReadingMode : undefined}
+                saveStatus={saveStatus}
+                onRetrySave={retrySave}
+                onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}
+                onOpenWikiLink={title => {
+                  const note = allNotes.find(item => item.title.toLocaleLowerCase() === title.toLocaleLowerCase())
+                  if (note) void handlePrimaryNoteSelect(note)
+                }}
+                onShare={() => { void handleShareNote().catch(error => console.error('Failed to share note:', error)) }}
+              />
+              <BacklinksPanel title={currentNote.title} content={currentNote.content} notes={allNotes} onOpenNote={filename => { void handleOpenNoteByFilename(filename) }} />
+            </div>
           ) : (
             <div className="app-welcome">
               <div className="app-welcome-icon">
@@ -382,8 +473,10 @@ function AppContent() {
         </main>
         <AIAssistant
           visible={aiVisible}
-          onClose={() => setAIVisible(false)}
+          onClose={() => { setAIInitialTab('complete'); setAIVisible(false) }}
           noteContent={currentNote?.content || ''}
+          onOpenNote={filename => { void handleOpenNoteByFilename(filename) }}
+          initialTab={aiInitialTab}
         />
         <SettingsDialog
           visible={settingsVisible}
@@ -404,6 +497,15 @@ function AppContent() {
           onClose={() => setHistoryTarget(null)}
           onRestored={handleVersionRestored}
         />
+        <CommandPalette
+          visible={commandPaletteVisible}
+          notes={allNotes}
+          onClose={() => setCommandPaletteVisible(false)}
+          onOpenNote={note => { void handlePrimaryNoteSelect(note) }}
+          onCommand={runAppCommand}
+        />
+        <GitPanel visible={gitPanelVisible} onClose={() => setGitPanelVisible(false)} />
+        {dropActive && <div className="markdown-drop-overlay"><strong>{t.editor.placeholder}</strong><span>{locale === 'zh' ? '拖放 .md 文件以导入并查看' : 'Drop a .md file to import and view'}</span></div>}
       </div>
     </div>
   )

@@ -11,6 +11,7 @@ import {
   applyTextAreaEdit,
   createVisualTable,
   deleteVisualTableColumn,
+  deleteVisualTableColumnAtCell,
   deleteVisualTableRow,
   editTextIndent,
   editorHtmlToMarkdown,
@@ -27,9 +28,14 @@ import {
   isCaretAtEndOfElement,
   moveAcrossVisualTable,
   removeCodeBlockAtSelection,
+  parseCsvTable,
+  replaceVisualTableFromCsv,
+  sortVisualTableColumn,
+  syncCodeBlockLanguageHistory,
   toggleHeadingFold,
   toggleListFold,
   updateCodeBlockLanguage,
+  visualTableToCsv,
 } from './MarkdownEditor'
 import { renderMarkdown } from '../../services/markdown'
 
@@ -606,10 +612,10 @@ describe('native code-block editing', () => {
     expect(execCommand).toHaveBeenCalledTimes(1)
   })
 
-  it('changes language and exits a code block through native replacements', () => {
+  it('changes language in place and exits without nesting adjacent content', () => {
     const editor = document.createElement('div')
     editor.contentEditable = 'true'
-    editor.innerHTML = '<pre data-lang="js"><span class="code-lang-label" contenteditable="false">js</span><code class="hljs language-js">value</code></pre>'
+    editor.innerHTML = '<div class="code-block-wrapper"><pre data-lang="js"><span class="code-lang-label" contenteditable="false">js</span><code class="hljs language-js">value</code></pre></div><table><tbody><tr><td>keep</td></tr></tbody></table>'
     document.body.appendChild(editor)
     const codeText = editor.querySelector('code')!.firstChild!
     const range = document.createRange()
@@ -624,14 +630,21 @@ describe('native code-block editing', () => {
     const originalPre = editor.querySelector('pre')!
     expect(updateCodeBlockLanguage(editor, originalPre, 'python', true, selection)).toBe(true)
     const updatedPre = editor.querySelector('pre')!
+    expect(updatedPre).toBe(originalPre)
     expect(updatedPre.getAttribute('data-lang')).toBe('python')
     expect(updatedPre.querySelector('.code-lang-label')?.textContent).toBe('python')
+    expect(updatedPre.querySelector('code')?.getAttribute('data-lang')).toBe('python')
+    expect(updatedPre.querySelector('code')?.textContent).toBe('value')
+    expect(editor.querySelector('.code-block-wrapper')?.nextElementSibling?.tagName).toBe('TABLE')
+    const insertCalls = execCommand.mock.calls.filter(call => call[0] === 'insertHTML')
+    expect(insertCalls).toHaveLength(1)
+    expect(insertCalls[0][2]).toContain('code-lang-history-value')
+    expect(insertCalls[0][2]).not.toContain('<pre')
+    expect(insertCalls[0][2]).not.toContain('<table')
     expect(insertParagraphAfterCodeBlock(editor, updatedPre, selection)).toBe(true)
     expect(editor.querySelector('pre')?.getAttribute('data-lang')).toBe('python')
     expect(editor.querySelector('p')).not.toBeNull()
-    const insertCalls = execCommand.mock.calls.filter(call => call[0] === 'insertHTML')
-    expect(insertCalls).toHaveLength(1)
-    expect(execCommand.mock.calls.some(call => call[0] === 'insertParagraph')).toBe(false)
+    expect(execCommand.mock.calls.filter(call => call[0] === 'insertHTML')).toHaveLength(1)
   })
 
   it('places an exited paragraph outside a wrapped code block', () => {
@@ -678,10 +691,10 @@ describe('native code-block editing', () => {
     expect(editor.querySelector('pre')?.nextElementSibling?.tagName).toBe('P')
   })
 
-  it('makes language changes undoable without leaving stale metadata', () => {
+  it('syncs language metadata when the native history marker is undone and redone', () => {
     const editor = document.createElement('div')
     editor.contentEditable = 'true'
-    editor.innerHTML = '<pre data-lang="javascript"><span class="code-lang-label" contenteditable="false">javascript</span><code data-lang="javascript" class="hljs language-javascript">value</code></pre>'
+    editor.innerHTML = '<pre data-lang="javascript"><span class="code-lang-label" contenteditable="false">javascript</span><code data-lang="javascript" class="hljs language-javascript">const value = 1</code></pre><p>after</p>'
     document.body.appendChild(editor)
     const codeText = editor.querySelector('code')!.firstChild!
     const range = document.createRange()
@@ -690,17 +703,26 @@ describe('native code-block editing', () => {
     const selection = window.getSelection()!
     selection.removeAllRanges()
     selection.addRange(range)
-    const execCommand = emulateNativeHistory(editor, selection)
+    const execCommand = emulateInsertHtml(selection)
     Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
 
     expect(updateCodeBlockLanguage(editor, editor.querySelector('pre')!, 'python', true, selection)).toBe(true)
-    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nvalue\n```')
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nconst value = 1\n```')
     expect(editor.querySelector('code')?.getAttribute('data-lang')).toBe('python')
+    expect(editor.querySelector('code')?.classList.contains('language-python')).toBe(true)
+    expect(editor.querySelector('pre')?.nextElementSibling?.textContent).toBe('after')
+    const host = editor.querySelector<HTMLElement>('.code-lang-history-host')!
+    const marker = host.querySelector<HTMLElement>('.code-lang-history-value')!
+    const savedMarker = marker.cloneNode(true)
 
-    expect(document.execCommand('undo')).toBe(true)
-    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```javascript\nvalue\n```')
-    expect(document.execCommand('redo')).toBe(true)
-    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nvalue\n```')
+    marker.remove()
+    expect(syncCodeBlockLanguageHistory(editor, selection)).toBe(true)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```javascript\nconst value = 1\n```')
+
+    host.appendChild(savedMarker)
+    expect(syncCodeBlockLanguageHistory(editor, selection)).toBe(true)
+    expect(editorHtmlToMarkdown(editor.innerHTML)).toContain('```python\nconst value = 1\n```')
+    expect(execCommand.mock.calls.filter(call => call[0] === 'insertHTML')).toHaveLength(1)
   })
 
   it('makes deleting an empty code block undoable', () => {
@@ -798,6 +820,37 @@ describe('visual table editing', () => {
     expect(result.changed).toBe(true)
     expect(table.tBodies.item(0)?.rows).toHaveLength(2)
     expect(result.cell).toBe(table.tBodies.item(0)?.rows.item(1)?.cells.item(0))
+  })
+
+  it('returns a connected neighboring cell after deleting the active column', () => {
+    const table = createVisualTable(2, 2)
+    document.body.appendChild(table)
+    const row = table.tBodies.item(0)!.rows.item(0)!
+    const activeCell = row.cells.item(1)!
+
+    const nextCell = deleteVisualTableColumnAtCell(table, activeCell)
+
+    expect(activeCell.isConnected).toBe(false)
+    expect(Array.from(table.rows).every(currentRow => currentRow.cells.length === 1)).toBe(true)
+    expect(nextCell).toBe(row.cells.item(0))
+    expect(nextCell?.isConnected).toBe(true)
+  })
+
+  it('round-trips CSV values and replaces a visual table', () => {
+    const table = createVisualTable(2, 2)
+    table.rows.item(0)!.cells.item(0)!.textContent = 'Name'
+    table.rows.item(0)!.cells.item(1)!.textContent = 'Comment'
+    table.rows.item(1)!.cells.item(0)!.textContent = 'A, B'
+    table.rows.item(1)!.cells.item(1)!.textContent = 'said "yes"'
+    expect(visualTableToCsv(table)).toBe('Name,Comment\n"A, B","said ""yes"""')
+    expect(parseCsvTable('Name,Value\nA,2\nB,1')).toEqual([['Name', 'Value'], ['A', '2'], ['B', '1']])
+
+    document.body.appendChild(table)
+    const cell = replaceVisualTableFromCsv(table, 'Name,Value\nB,2\nA,10')
+    const replacement = cell?.closest('table')!
+    expect(replacement.rows).toHaveLength(3)
+    expect(sortVisualTableColumn(replacement, 0, 'asc')).toBe(true)
+    expect(replacement.tBodies.item(0)?.rows.item(0)?.cells.item(0)?.textContent).toBe('A')
   })
 })
 

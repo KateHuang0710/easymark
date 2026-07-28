@@ -1,4 +1,4 @@
-import { AIConnectionConfig, AIMessage } from '../types'
+import { AIConnectionConfig, AIMessage, NoteDocument } from '../types'
 
 export const DEFAULT_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
 const NON_COMPLETION_PATTERNS = /embedding|moderation|tts|whisper|dall-e|davinci|babbage|curie|ada|instruct|realtime|audio/i
@@ -177,6 +177,70 @@ export async function getSuggestion(text: string): Promise<string> {
     { role: 'system', content: `${SYSTEM_PROMPT}\n\n${SUGGESTION_PROMPT}` },
     { role: 'user', content: `Selected Markdown:\n<content>\n${text}\n</content>` },
   ], 350, 0.35)
+}
+
+export type AITransformAction = 'polish' | 'translate-zh' | 'translate-en' | 'shorten' | 'expand' | 'summarize' | 'to-list' | 'to-table'
+
+const TRANSFORM_INSTRUCTIONS: Record<AITransformAction, string> = {
+  polish: 'Polish the text for clarity and correctness while preserving its language, facts, tone, and Markdown structure.',
+  'translate-zh': 'Translate the text into natural Simplified Chinese. Preserve Markdown structure and return only the translation.',
+  'translate-en': 'Translate the text into natural English. Preserve Markdown structure and return only the translation.',
+  shorten: 'Make the text substantially shorter without losing important facts. Preserve useful Markdown.',
+  expand: 'Expand the text with concrete detail that follows directly from the existing content. Do not invent facts.',
+  summarize: 'Summarize the text concisely in the same language. Return only the summary.',
+  'to-list': 'Convert the text into a concise Markdown bullet list. Return only the list.',
+  'to-table': 'Convert the text into a valid GitHub Flavored Markdown table. Return only the table.',
+}
+
+export async function transformSelection(text: string, action: AITransformAction): Promise<string> {
+  if (!text.trim()) return ''
+  return callAI([
+    { role: 'system', content: `${SYSTEM_PROMPT}\n\nYour response replaces selected editor text. Return only the replacement Markdown: no heading, label, commentary, quotation wrapper, or closing sentence.` },
+    { role: 'user', content: `${TRANSFORM_INSTRUCTIONS[action]}\n\n<selected-markdown>\n${text}\n</selected-markdown>` },
+  ], action === 'expand' ? 700 : 450, 0.25)
+}
+
+function knowledgeContext(documents: NoteDocument[], maxChars = 60_000): string {
+  let used = 0
+  const sections: string[] = []
+  for (const document of documents) {
+    const remaining = maxChars - used
+    if (remaining <= 0) break
+    const content = document.content.slice(0, Math.min(remaining, 6_000))
+    sections.push(`<note title="${document.title.replace(/["<>]/g, '')}">\n${content}\n</note>`)
+    used += content.length
+  }
+  return sections.join('\n\n')
+}
+
+export async function askKnowledgeBase(question: string, documents: NoteDocument[]): Promise<string> {
+  return callAI([
+    { role: 'system', content: `${SYSTEM_PROMPT}\nAnswer only from the supplied notes. Cite supporting notes using [[Note Title]] after each relevant claim. If the notes do not contain the answer, say so directly. Do not invent sources.` },
+    { role: 'user', content: `Question: ${question}\n\nNotes:\n${knowledgeContext(documents)}` },
+  ], 800, 0.2)
+}
+
+function localSemanticScore(query: string, document: NoteDocument): number {
+  const normalized = query.toLocaleLowerCase().trim()
+  const haystack = `${document.title}\n${document.content}`.toLocaleLowerCase()
+  const terms = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  const bigrams = Array.from({ length: Math.max(0, normalized.length - 1) }, (_, index) => normalized.slice(index, index + 2)).filter(value => value.trim().length === 2)
+  let score = document.title.toLocaleLowerCase().includes(normalized) ? 20 : 0
+  for (const term of terms) {
+    if (document.title.toLocaleLowerCase().includes(term)) score += 8
+    const matches = haystack.split(term).length - 1
+    score += Math.min(matches, 8) * 2
+  }
+  for (const bigram of bigrams) if (haystack.includes(bigram)) score += 0.25
+  return score
+}
+
+export async function semanticSearchNotes(query: string, documents: NoteDocument[]): Promise<Array<NoteDocument & { score: number }>> {
+  return documents
+    .map(document => ({ ...document, score: localSemanticScore(query, document) }))
+    .filter(document => document.score > 0)
+    .sort((a, b) => b.score - a.score || b.lastModified - a.lastModified)
+    .slice(0, 20)
 }
 
 export async function chatWithAI(

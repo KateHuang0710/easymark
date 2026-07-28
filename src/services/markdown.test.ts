@@ -37,4 +37,27 @@ describe('renderMarkdown security', () => {
     expect(html).toContain('<code data-lang="typescript"')
     expect(html).toContain('language-typescript')
   })
+
+  it('renders extended Markdown safely in preview mode', () => {
+    const html = renderMarkdown(`> [!NOTE] Important\n\nTerm\n: Definition\n\n==marked== and $x^2$ with [[Other Note]]\n\n[^a]\n\n[^a]: Footnote`)
+    expect(html).toContain('callout-note')
+    expect(html).toContain('<dl>')
+    expect(html).toContain('<mark>marked</mark>')
+    expect(html).toContain('class="math-inline"')
+    expect(html).toContain('data-wiki-title="Other Note"')
+    expect(html).toContain('class="footnotes"')
+    expect(html).not.toContain('<script')
+  })
+
+  it('renders flowchart and sequence Mermaid blocks without executable SVG', () => {
+    const flow = renderMarkdown('```mermaid\nflowchart TD\nA[Start] --> B[Done]\n```')
+    expect(flow).toContain('mermaid-diagram')
+    expect(flow).toContain('Start')
+    expect(flow).toContain('Done')
+    expect(flow).not.toContain('<svg')
+
+    const editable = renderMarkdown('```mermaid\nflowchart TD\nA --> B\n```', true, 'editable')
+    expect(editable).toContain('<pre')
+    expect(editable).toContain('data-lang="mermaid"')
+  })
 })

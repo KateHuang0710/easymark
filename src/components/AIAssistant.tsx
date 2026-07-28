@@ -1,26 +1,33 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { getCompletion, getSuggestion, chatWithAI } from '../services/ai'
+import { askKnowledgeBase, getCompletion, getSuggestion, chatWithAI, semanticSearchNotes } from '../services/ai'
 import { useSettings } from '../contexts/SettingsContext'
 import { useTranslation } from '../i18n'
 import { renderMarkdown } from '../services/markdown'
+import { NoteDocument } from '../types'
+import * as storage from '../services/storage'
 
 interface AIAssistantProps {
   visible: boolean
   onClose: () => void
   noteContent: string
+  onOpenNote?: (filename: string) => void
+  initialTab?: AITab
 }
 
-type AITab = 'complete' | 'chat'
+type AITab = 'complete' | 'chat' | 'knowledge'
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
-export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps) {
-  const { t } = useTranslation()
+export function AIAssistant({ visible, onClose, noteContent, onOpenNote, initialTab }: AIAssistantProps) {
+  const { t, locale } = useTranslation()
   const { aiEnabled, settings } = useSettings()
   const [activeTab, setActiveTab] = useState<AITab>('complete')
   const [input, setInput] = useState('')
   const [output, setOutput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<NoteDocument[]>([])
+  const [knowledgeResults, setKnowledgeResults] = useState<Array<NoteDocument & { score: number }>>([])
+  const [knowledgeAnswer, setKnowledgeAnswer] = useState('')
   const chatHistoryRef = useRef(chatHistory)
   chatHistoryRef.current = chatHistory
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -43,6 +50,15 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose, visible])
+
+  useEffect(() => {
+    if (visible && initialTab) setActiveTab(initialTab)
+  }, [initialTab, visible])
+
+  useEffect(() => {
+    if (!visible || activeTab !== 'knowledge') return
+    void storage.listNoteDocuments().then(setKnowledgeDocuments).catch(error => setKnowledgeAnswer(`${t.ai.error}: ${error instanceof Error ? error.message : String(error)}`))
+  }, [activeTab, t.ai.error, visible])
 
   const handleComplete = async () => {
     if (!input.trim()) return
@@ -95,6 +111,24 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
       if (mountedRef.current) setChatHistory(prev => [...prev, { role: 'assistant', content: `${t.ai.error}: ${err.message || 'Failed'}` }])
     }
     if (mountedRef.current) setLoading(false)
+  }
+
+  const handleKnowledgeSearch = async () => {
+    if (!input.trim()) return
+    setLoading(true)
+    setKnowledgeAnswer('')
+    try { setKnowledgeResults(await semanticSearchNotes(input, knowledgeDocuments)) }
+    catch (error) { setKnowledgeAnswer(`${t.ai.error}: ${error instanceof Error ? error.message : String(error)}`) }
+    setLoading(false)
+  }
+
+  const handleKnowledgeQuestion = async () => {
+    if (!input.trim() || !aiEnabled) return
+    setLoading(true)
+    setKnowledgeAnswer('')
+    try { setKnowledgeAnswer(await askKnowledgeBase(input, knowledgeDocuments)) }
+    catch (error) { setKnowledgeAnswer(`${t.ai.error}: ${error instanceof Error ? error.message : String(error)}`) }
+    setLoading(false)
   }
 
   const insertToNote = (text: string) => {
@@ -166,6 +200,10 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             <span>{t.ai.chat}</span>
+          </button>
+          <button className={`ai-tab ${activeTab === 'knowledge' ? 'active' : ''}`} onClick={() => setActiveTab('knowledge')}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/><path d="M8 11h6M11 8v6"/></svg>
+            <span>{locale === 'zh' ? '知识库' : 'Knowledge'}</span>
           </button>
         </div>
         <button className="ai-panel-close" onClick={onClose}>
@@ -261,6 +299,21 @@ export function AIAssistant({ visible, onClose, noteContent }: AIAssistantProps)
                 </svg>
               </button>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'knowledge' && (
+          <div className="ai-knowledge">
+            <textarea className="ai-textarea" value={input} onChange={event => setInput(event.target.value)} placeholder={locale === 'zh' ? '搜索笔记，或向全部笔记提问…' : 'Search notes, or ask all notes…'} rows={3}/>
+            <div className="ai-complete-actions">
+              <button className="ai-btn ai-btn-primary" disabled={loading || !input.trim()} onClick={() => { void handleKnowledgeSearch() }}>{locale === 'zh' ? '语义搜索' : 'Semantic search'}</button>
+              <button className="ai-btn" disabled={loading || !input.trim() || !aiEnabled} onClick={() => { void handleKnowledgeQuestion() }}>{locale === 'zh' ? '询问全部笔记' : 'Ask all notes'}</button>
+            </div>
+            {!aiEnabled && <p className="ai-hint">{locale === 'zh' ? '本地语义搜索可直接使用；配置 AI 后可进行跨笔记问答。' : 'Local semantic search works now; configure AI for cross-note Q&A.'}</p>}
+            <div className="ai-knowledge-results">
+              {knowledgeResults.map(result => <button key={result.filename} onClick={() => onOpenNote?.(result.filename)}><strong>{result.title}</strong><small>{result.content.replace(/\s+/g, ' ').slice(0, 150)}</small></button>)}
+            </div>
+            {knowledgeAnswer && <div className="ai-output-content ai-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(knowledgeAnswer, settings.showCodeLangLabel) }}/>}
           </div>
         )}
       </div>

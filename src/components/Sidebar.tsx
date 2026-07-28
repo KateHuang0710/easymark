@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { DeleteNoteResult, Note, NoteSummary, RenameNoteResult } from '../types'
 import { useTranslation } from '../i18n'
 
@@ -11,6 +11,8 @@ interface SidebarProps {
   onNoteCreate: (title?: string) => void | Promise<unknown>
   onNoteDelete: (filename: string) => void | DeleteNoteResult | Promise<void | DeleteNoteResult>
   onNoteRename: (oldFilename: string, newTitle: string) => void | RenameNoteResult | Promise<void | RenameNoteResult>
+  onTogglePinned: (filename: string) => void
+  onToggleFavorite: (filename: string) => void
   loading: boolean
   loadError: string
   onRetryLoad: () => void | Promise<unknown>
@@ -28,6 +30,8 @@ export function Sidebar({
   onNoteCreate,
   onNoteDelete,
   onNoteRename,
+  onTogglePinned,
+  onToggleFavorite,
   loading,
   loadError,
   onRetryLoad,
@@ -42,10 +46,18 @@ export function Sidebar({
   const [renameValue, setRenameValue] = useState('')
   const [operationPending, setOperationPending] = useState(false)
   const [operationError, setOperationError] = useState('')
+  const renameCancelRef = useRef(false)
 
   const handleCreate = () => {
     setCreating(true)
     setNewTitle('')
+  }
+
+  const cancelCreate = () => {
+    if (operationPending) return
+    setCreating(false)
+    setNewTitle('')
+    setOperationError('')
   }
 
   useEffect(() => {
@@ -72,6 +84,7 @@ export function Sidebar({
   }
 
   const startRename = (note: NoteSummary) => {
+    renameCancelRef.current = false
     setRenamingId(note.id)
     setRenameValue(note.title)
   }
@@ -191,11 +204,18 @@ export function Sidebar({
               type="text"
               value={newTitle}
               onChange={e => setNewTitle(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void confirmCreate() }; if (e.key === 'Escape') setCreating(false) }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); void confirmCreate() }
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelCreate() }
+              }}
+              onBlur={event => {
+                if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) cancelCreate()
+              }}
               placeholder={t.sidebar.noteTitle}
               autoFocus
               className="sidebar-create-input"
             />
+            <button type="button" className="sidebar-create-cancel" onClick={cancelCreate} title={t.editor.close} aria-label={t.editor.close}>×</button>
           </div>
         )}
 
@@ -227,10 +247,17 @@ export function Sidebar({
                   onChange={e => setRenameValue(e.target.value)}
                   onKeyDown={e => {
                     if (e.key === 'Enter') { e.preventDefault(); void confirmRename(note) }
-                    if (e.key === 'Escape') setRenamingId(null)
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      renameCancelRef.current = true
+                      setRenamingId(null)
+                    }
                     e.stopPropagation()
                   }}
-                  onBlur={() => { void confirmRename(note) }}
+                  onBlur={() => {
+                    if (!renameCancelRef.current) void confirmRename(note)
+                    renameCancelRef.current = false
+                  }}
                   autoFocus
                   className="sidebar-rename-input"
                   onClick={e => e.stopPropagation()}
@@ -241,6 +268,20 @@ export function Sidebar({
                 </span>
               )}
               <span className="sidebar-note-date">{formatDate(note.lastModified)}</span>
+            </div>
+            <div className="sidebar-note-markers">
+              <button
+                className={`sidebar-note-marker ${note.pinned ? 'active' : ''}`}
+                onClick={event => { event.stopPropagation(); onTogglePinned(note.filename) }}
+                title={note.pinned ? '取消置顶' : '置顶'}
+                aria-pressed={Boolean(note.pinned)}
+              >⌖</button>
+              <button
+                className={`sidebar-note-marker ${note.favorite ? 'active' : ''}`}
+                onClick={event => { event.stopPropagation(); onToggleFavorite(note.filename) }}
+                title={note.favorite ? '取消收藏' : '收藏'}
+                aria-pressed={Boolean(note.favorite)}
+              >☆</button>
             </div>
             <button
               className="sidebar-note-delete"

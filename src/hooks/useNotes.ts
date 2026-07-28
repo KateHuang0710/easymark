@@ -3,6 +3,7 @@ import { Note, NoteSummary, SaveStatus } from '../types'
 import * as storage from '../services/storage'
 import { LatestSaveQueue } from '../services/latestSaveQueue'
 import type { SaveSnapshot } from '../services/latestSaveQueue'
+import { decorateNotes, removeNoteMetadata, renameNoteMetadata, updateNoteMetadata } from '../services/noteMetadata'
 
 const savedStatus = (): SaveStatus => ({ state: 'saved', savedAt: Date.now() })
 
@@ -48,7 +49,7 @@ export function useNotes() {
     setLoading(true)
     setListError('')
     try {
-      const list = await storage.listNotes()
+      const list = decorateNotes(await storage.listNotes())
       if (requestId === listRequestRef.current) setNotes(list)
       return list
     } catch (error) {
@@ -84,7 +85,9 @@ export function useNotes() {
     if (requestId !== openRequestRef.current) return
     const content = await storage.readNote(note.filename)
     if (requestId !== openRequestRef.current) return
-    setCurrentNote(content === null ? null : { ...note, content })
+    const metadata = updateNoteMetadata(note.filename, { lastOpened: Date.now() })
+    setCurrentNote(content === null ? null : { ...note, ...metadata, content })
+    setNotes(prev => decorateNotes(prev.map(item => item.filename === note.filename ? { ...item, ...metadata } : item)))
     setSaveStatus(content === null ? { state: 'idle' } : savedStatus())
   }, [flushAutoSave])
 
@@ -100,7 +103,8 @@ export function useNotes() {
       content: result.content,
     }
     if (requestId === openRequestRef.current) {
-      setCurrentNote(note)
+      const metadata = updateNoteMetadata(note.filename, { lastOpened: Date.now() })
+      setCurrentNote({ ...note, ...metadata })
       setSaveStatus(savedStatus())
     }
     await refreshList()
@@ -111,6 +115,7 @@ export function useNotes() {
     const requestId = ++openRequestRef.current
     await flushAutoSave()
     const result = await storage.deleteNote(filename)
+    if (result.deleted) removeNoteMetadata(filename)
     if (requestId === openRequestRef.current && currentNoteRef.current?.filename === filename) {
       setCurrentNote(null)
       setSaveStatus({ state: 'idle' })
@@ -164,6 +169,7 @@ export function useNotes() {
     const requestId = ++openRequestRef.current
     await flushAutoSave()
     const result = await storage.renameNote(oldFilename, newTitle)
+    renameNoteMetadata(oldFilename, result.filename)
     if (requestId === openRequestRef.current && currentNoteRef.current?.filename === oldFilename) {
       setCurrentNote(prev => prev ? {
         ...prev,
@@ -176,7 +182,52 @@ export function useNotes() {
     return result
   }, [flushAutoSave, refreshList])
 
+  const adoptImportedNote = useCallback(async (result: { filename: string; title: string; content: string } | null) => {
+    if (!result) return null
+    const requestId = ++openRequestRef.current
+    await flushAutoSave()
+    const metadata = updateNoteMetadata(result.filename, { lastOpened: Date.now() })
+    const note: Note = {
+      id: result.filename.slice(0, -3),
+      title: result.title,
+      filename: result.filename,
+      lastModified: Date.now(),
+      content: result.content,
+      ...metadata,
+    }
+    if (requestId === openRequestRef.current) {
+      setCurrentNote(note)
+      setSaveStatus(savedStatus())
+    }
+    await refreshList()
+    return note
+  }, [flushAutoSave, refreshList])
+
+  const importMarkdownFile = useCallback(async (filePath: string) => {
+    return adoptImportedNote(await storage.importMarkdownFile(filePath))
+  }, [adoptImportedNote])
+
+  const chooseAndImportMarkdownFile = useCallback(async () => {
+    return adoptImportedNote(await storage.chooseAndImportMarkdownFile())
+  }, [adoptImportedNote])
+
   const filteredNotes = notes.filter(note => note.title.toLocaleLowerCase().includes(searchQuery.toLocaleLowerCase()))
+
+  const updateMetadata = useCallback((filename: string, patch: { pinned?: boolean; favorite?: boolean }) => {
+    const metadata = updateNoteMetadata(filename, patch)
+    setNotes(prev => decorateNotes(prev.map(note => note.filename === filename ? { ...note, ...metadata } : note)))
+    setCurrentNote(prev => prev?.filename === filename ? { ...prev, ...metadata } : prev)
+  }, [])
+
+  const togglePinned = useCallback((filename: string) => {
+    const note = notes.find(item => item.filename === filename)
+    updateMetadata(filename, { pinned: !note?.pinned })
+  }, [notes, updateMetadata])
+
+  const toggleFavorite = useCallback((filename: string) => {
+    const note = notes.find(item => item.filename === filename)
+    updateMetadata(filename, { favorite: !note?.favorite })
+  }, [notes, updateMetadata])
 
   return {
     notes: filteredNotes,
@@ -194,6 +245,10 @@ export function useNotes() {
     autoSave,
     retrySave,
     renameNote,
+    importMarkdownFile,
+    chooseAndImportMarkdownFile,
+    togglePinned,
+    toggleFavorite,
     refreshList,
     setCurrentNote,
     replaceCurrentNoteContent,

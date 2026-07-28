@@ -1,4 +1,4 @@
-import { DeleteNoteResult, NoteSummary, NoteVersion, RenameNoteResult } from '../types'
+import { BacklinkResult, DeleteNoteResult, GitCommit, GitStatus, NoteDocument, NoteSummary, NoteVersion, RenameNoteResult } from '../types'
 
 const api = () => window.electronAPI
 
@@ -11,3 +11,12 @@ export const restoreNoteVersion = (filename: string, versionId: string): Promise
 export const createNote = (title: string): Promise<{ filename: string; title: string; content: string }> => api().createNote(title)
 export const deleteNote = (filename: string): Promise<DeleteNoteResult> => api().deleteNote(filename)
 export const renameNote = (oldFilename: string, newTitle: string): Promise<RenameNoteResult> => api().renameNote(oldFilename, newTitle)
+export const listNoteDocuments = (): Promise<NoteDocument[]> => api().listNoteDocuments()
+export const listBacklinks = (title: string): Promise<BacklinkResult[]> => api().listBacklinks(title)
+export const importMarkdownFile = (filePath: string) => api().importMarkdownFile(filePath)
+export const chooseAndImportMarkdownFile = () => api().chooseAndImportMarkdownFile()
+export const getGitStatus = (): Promise<GitStatus> => api().getGitStatus()
+export const initializeGit = (): Promise<GitStatus> => api().initializeGit()
+export const commitGit = (message: string): Promise<GitStatus> => api().commitGit(message)
+export const getGitHistory = (): Promise<GitCommit[]> => api().getGitHistory()
+export const getGitDiff = (): Promise<string> => api().getGitDiff()

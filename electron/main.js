@@ -24,6 +24,7 @@ const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
 const { renameFileCaseSafely } = require('./case-rename')
 const { isAdHocCodeSignature } = require('./signing')
+const { commitGit, getGitDiff, getGitHistory, getGitStatus, initializeGit } = require('./git-repository')
 
 function shouldUseMockKeychain() {
   if (process.platform !== 'darwin' || !app.isPackaged) return false
@@ -59,6 +60,7 @@ const MAX_NOTE_VERSIONS = 10
 const MAX_SEARCH_QUERY_LENGTH = 200
 const MAX_EXPORT_HTML_BYTES = 10 * 1024 * 1024
 const MAX_CLIPBOARD_TEXT_BYTES = 20 * 1024 * 1024
+const MAX_KNOWLEDGE_BYTES = 5 * 1024 * 1024
 
 const MAX_AI_MESSAGE_BYTES = 100 * 1024
 const MAX_AI_MESSAGES = 50
@@ -244,6 +246,72 @@ async function readRegularNote(filePath) {
   }
 }
 
+async function readExternalMarkdown(filePath) {
+  if (typeof filePath !== 'string' || !filePath || filePath.length > 4096 || path.extname(filePath).toLowerCase() !== '.md') {
+    throw new Error('Only Markdown files can be opened')
+  }
+  const resolved = path.resolve(filePath)
+  const { handle } = await openRegularNote(resolved)
+  try {
+    return { title: path.basename(resolved, path.extname(resolved)), content: await handle.readFile('utf8') }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function importMarkdownIntoNotes(filePath) {
+  const external = await readExternalMarkdown(filePath)
+  await ensureNotesDir()
+  const safeTitle = sanitizeTitle(external.title)
+  return withNoteMutationLock(async () => {
+    let counter = 0
+    while (true) {
+      const suffix = counter ? `-${counter}` : ''
+      const filename = `${safeTitle}${suffix}.md`
+      const target = resolveNotePath(notesDir, filename)
+      try {
+        const handle = await fs.promises.open(target, 'wx', 0o600)
+        try {
+          await handle.writeFile(external.content, 'utf8')
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        return { filename, title: filename.slice(0, -3), content: external.content }
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        counter += 1
+      }
+    }
+  })
+}
+
+async function listNoteDocuments() {
+  await ensureNotesDir()
+  const entries = await fs.promises.readdir(notesDir, { withFileTypes: true })
+  const result = []
+  let totalBytes = 0
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue
+    try {
+      const filePath = resolveNotePath(notesDir, entry.name)
+      const { handle, stat } = await openRegularNote(filePath)
+      try {
+        if (totalBytes + stat.size > MAX_KNOWLEDGE_BYTES) continue
+        const content = await handle.readFile('utf8')
+        totalBytes += stat.size
+        const title = entry.name.slice(0, -3)
+        result.push({ id: title, title, filename: entry.name, lastModified: stat.mtimeMs, content })
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+  return result.sort((a, b) => b.lastModified - a.lastModified)
+}
+
 function isTrustedSender(event) {
   return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents)
 }
@@ -308,7 +376,26 @@ function createApplicationMenu() {
         { role: 'quit' },
       ],
     },
-    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    {
+      label: 'File',
+      submenu: [
+        { label: 'New Note', accelerator: 'CmdOrCtrl+N', click: () => mainWindow?.webContents.send('menu-command', 'new-note') },
+        { label: 'Open Markdown…', accelerator: 'CmdOrCtrl+O', click: () => mainWindow?.webContents.send('menu-command', 'open-markdown') },
+        { type: 'separator' },
+        { label: 'Share Note…', accelerator: 'CmdOrCtrl+Shift+E', click: () => mainWindow?.webContents.send('menu-command', 'share-note') },
+        { label: 'Export…', click: () => mainWindow?.webContents.send('menu-command', 'export-note') },
+      ],
+    },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { type: 'separator' }, { label: 'Command Palette…', accelerator: 'CmdOrCtrl+P', click: () => mainWindow?.webContents.send('menu-command', 'command-palette') }, { label: 'Search All Notes…', accelerator: 'CmdOrCtrl+Shift+F', click: () => mainWindow?.webContents.send('menu-command', 'search-all') }] },
+    {
+      label: 'Note',
+      submenu: [
+        { label: 'Toggle Favorite', click: () => mainWindow?.webContents.send('menu-command', 'toggle-favorite') },
+        { label: 'Toggle Pin', click: () => mainWindow?.webContents.send('menu-command', 'toggle-pin') },
+        { label: 'Git History…', click: () => mainWindow?.webContents.send('menu-command', 'git-panel') },
+      ],
+    },
+    { label: 'AI', submenu: [{ label: 'Open Assistant', accelerator: 'CmdOrCtrl+Shift+A', click: () => mainWindow?.webContents.send('menu-command', 'toggle-ai') }, { label: 'Ask Notes…', click: () => mainWindow?.webContents.send('menu-command', 'ask-notes') }] },
     {
       label: 'View',
       submenu: [
@@ -808,6 +895,91 @@ ipcMain.handle('notes:searchAll', async (event, rawQuery) => {
     }
   }
   return results.sort((a, b) => b.score - a.score).slice(0, 20)
+})
+
+ipcMain.handle('notes:listDocuments', async event => {
+  assertTrustedSender(event)
+  return listNoteDocuments()
+})
+
+ipcMain.handle('notes:listBacklinks', async (event, rawTitle) => {
+  assertTrustedSender(event)
+  if (typeof rawTitle !== 'string' || !rawTitle.trim() || rawTitle.length > 255) throw new Error('Invalid note title')
+  const title = rawTitle.trim().toLocaleLowerCase()
+  const documents = await listNoteDocuments()
+  return documents.flatMap(document => {
+    const lower = document.content.toLocaleLowerCase()
+    const marker = `[[${title}]]`
+    const index = lower.indexOf(marker)
+    if (index < 0 || document.title.toLocaleLowerCase() === title) return []
+    const start = Math.max(0, index - 60)
+    return [{ filename: document.filename, title: document.title, snippet: document.content.slice(start, index + marker.length + 80).replace(/\s+/g, ' ').trim() }]
+  })
+})
+
+ipcMain.handle('notes:importMarkdown', async (event, filePath) => {
+  assertTrustedSender(event)
+  return importMarkdownIntoNotes(filePath)
+})
+
+ipcMain.handle('notes:chooseAndImportMarkdown', async event => {
+  assertTrustedSender(event)
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  })
+  if (result.canceled || !result.filePaths[0]) return null
+  return importMarkdownIntoNotes(result.filePaths[0])
+})
+
+ipcMain.handle('share:note', async (event, rawTitle, content) => {
+  assertTrustedSender(event)
+  if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_NOTE_BYTES) throw new Error('Invalid note content')
+  const title = sanitizeExportFilename(rawTitle)
+  const directory = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'easymark-share-'))
+  const filePath = path.join(directory, `${title}.md`)
+  await fs.promises.writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 })
+  setTimeout(() => fs.promises.rm(directory, { recursive: true, force: true }).catch(() => {}), 10 * 60 * 1000).unref?.()
+  if (process.platform === 'darwin') {
+    const menu = Menu.buildFromTemplate([{
+      role: 'shareMenu',
+      sharingItem: { filePaths: [filePath], texts: [content.slice(0, 20_000)] },
+    }])
+    menu.popup({ window: mainWindow })
+    return true
+  }
+  shell.showItemInFolder(filePath)
+  return true
+})
+
+ipcMain.handle('git:status', async event => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  return getGitStatus(notesDir)
+})
+
+ipcMain.handle('git:initialize', async event => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  return withNoteMutationLock(() => initializeGit(notesDir))
+})
+
+ipcMain.handle('git:commit', async (event, message) => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  return withNoteMutationLock(() => commitGit(notesDir, message))
+})
+
+ipcMain.handle('git:history', async event => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  return getGitHistory(notesDir)
+})
+
+ipcMain.handle('git:diff', async event => {
+  assertTrustedSender(event)
+  await ensureNotesDir()
+  return getGitDiff(notesDir)
 })
 
 

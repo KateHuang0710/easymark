@@ -9,3 +9,4 @@ release/
 build/icon.iconset/
 coverage/
 .cache/
+__pycache__/

@@ -1,12 +1,12 @@
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
-import { renderMarkdown, highlightMarkdown } from '../../services/markdown'
+import { renderMarkdown, highlightMarkdown, highlightCode } from '../../services/markdown'
 import { useTranslation } from '../../i18n'
 import TurndownService from 'turndown'
 import { SearchReplace } from './SearchReplace'
 import { OutlinePanel } from './OutlinePanel'
 import { ContextMenu, useEditorContextMenu } from './ContextMenu'
 import { InlineSuggestion } from './InlineSuggestion'
-import { getInlineCompletion, isConfigured } from '../../services/ai'
+import { AITransformAction, getInlineCompletion, isConfigured, transformSelection as transformAISelection } from '../../services/ai'
 import { useSettings } from '../../contexts/SettingsContext'
 import { SaveStatus } from '../../types'
 import { formatShortcut, formatShortcutLabel, isInlineCodeShortcut } from '../../utils/shortcuts'
@@ -48,6 +48,16 @@ turndown.addRule('strikethrough', {
 turndown.addRule('underline', {
   filter: ['u'],
   replacement: content => `<u>${content}</u>`,
+})
+
+turndown.addRule('highlight', {
+  filter: ['mark'],
+  replacement: content => `==${content}==`,
+})
+
+turndown.addRule('wikiLink', {
+  filter: node => node.nodeName === 'A' && node.classList.contains('wiki-link'),
+  replacement: (_content: string, node: HTMLElement) => `[[${node.dataset.wikiTitle || node.textContent || ''}]]`,
 })
 
 turndown.addRule('taskListItem', {
@@ -144,6 +154,8 @@ interface MarkdownEditorProps {
   saveStatus?: SaveStatus
   onRetrySave?: () => void | Promise<void>
   onOpenHistory?: () => void
+  onOpenWikiLink?: (title: string) => void
+  onShare?: () => void
 }
 
 type Tab = 'edit' | 'source' | 'preview'
@@ -244,12 +256,14 @@ function setCodeBlockLanguage(pre: HTMLPreElement, language: string, showLabel =
     code.textContent = pre.textContent || '\n'
     pre.replaceChildren(code)
   }
+  const codeText = code.textContent || ''
   code.setAttribute('data-lang', normalizedLanguage)
   Array.from(code.classList).forEach(className => {
     if (className.startsWith('language-')) code!.classList.remove(className)
   })
   code.classList.add('hljs')
   if (normalizedLanguage) code.classList.add(`language-${normalizedLanguage}`)
+  code.innerHTML = highlightCode(codeText, normalizedLanguage)
 
   pre.querySelector('.code-lang-label')?.remove()
   if (normalizedLanguage && showLabel) {
@@ -259,6 +273,92 @@ function setCodeBlockLanguage(pre: HTMLPreElement, language: string, showLabel =
     label.textContent = normalizedLanguage
     pre.insertBefore(label, code)
   }
+}
+
+const CODE_LANGUAGE_HISTORY_HOST = 'code-lang-history-host'
+const CODE_LANGUAGE_HISTORY_VALUE = 'code-lang-history-value'
+
+function getCodeLanguageHistoryMarkers(host: HTMLElement): HTMLElement[] {
+  return Array.from(host.children).filter(child => child.classList.contains(CODE_LANGUAGE_HISTORY_VALUE)) as HTMLElement[]
+}
+
+function getCodeLanguageHistorySignature(host: HTMLElement): string {
+  return getCodeLanguageHistoryMarkers(host)
+    .map(marker => marker.getAttribute('data-easymark-edit-marker') || '')
+    .join('|')
+}
+
+function recordCodeLanguageChange(
+  root: HTMLElement,
+  pre: HTMLPreElement,
+  language: string,
+  caretOffset: number,
+  showLabel: boolean,
+  selection: Selection,
+): void {
+  let host = pre.querySelector<HTMLElement>(`:scope > .${CODE_LANGUAGE_HISTORY_HOST}`)
+  if (!host) {
+    host = document.createElement('span')
+    host.className = CODE_LANGUAGE_HISTORY_HOST
+    host.contentEditable = 'true'
+    host.setAttribute('aria-hidden', 'true')
+    host.dataset.initialLang = getCodeBlockLanguage(pre, pre.querySelector('code'))
+    host.dataset.initialCaretOffset = String(caretOffset)
+    host.dataset.appliedSignature = ''
+    pre.appendChild(host)
+  }
+  host.dataset.showLabel = String(showLabel)
+
+  const marker = document.createElement('span')
+  const markerId = nextNativeEditMarker('code-language')
+  marker.className = CODE_LANGUAGE_HISTORY_VALUE
+  marker.setAttribute(markerId.attribute, markerId.value)
+  marker.dataset.lang = normalizeCodeLanguage(language)
+  marker.dataset.caretOffset = String(caretOffset)
+  marker.appendChild(document.createElement('br'))
+
+  const historyRange = document.createRange()
+  historyRange.selectNodeContents(host)
+  historyRange.collapse(false)
+  root.focus()
+  selection.removeAllRanges()
+  selection.addRange(historyRange)
+  if (typeof document.execCommand !== 'function' || !document.execCommand('insertHTML', false, marker.outerHTML)) {
+    host.appendChild(marker)
+  }
+  host.dataset.appliedSignature = getCodeLanguageHistorySignature(host)
+}
+
+export function syncCodeBlockLanguageHistory(
+  root: HTMLElement | null,
+  selection = window.getSelection(),
+): boolean {
+  if (!root) return false
+  let changed = false
+  let caretTarget: { code: HTMLElement; offset: number } | null = null
+
+  for (const host of root.querySelectorAll<HTMLElement>(`.${CODE_LANGUAGE_HISTORY_HOST}`)) {
+    const signature = getCodeLanguageHistorySignature(host)
+    if (signature === (host.dataset.appliedSignature || '')) continue
+    const pre = host.closest('pre') as HTMLPreElement | null
+    if (!pre || !root.contains(pre)) continue
+    const markers = getCodeLanguageHistoryMarkers(host)
+    const activeMarker = markers[markers.length - 1]
+    const language = activeMarker?.dataset.lang ?? host.dataset.initialLang ?? ''
+    const rawOffset = activeMarker?.dataset.caretOffset ?? host.dataset.initialCaretOffset ?? '0'
+    const caretOffset = Number.parseInt(rawOffset, 10)
+    setCodeBlockLanguage(pre, language, host.dataset.showLabel !== 'false')
+    host.dataset.appliedSignature = signature
+    const code = pre.querySelector<HTMLElement>('code')
+    if (code) caretTarget = { code, offset: Number.isFinite(caretOffset) ? caretOffset : 0 }
+    changed = true
+  }
+
+  if (caretTarget) {
+    root.focus()
+    setCaretByOffset(caretTarget.code, caretTarget.offset)
+  }
+  return changed
 }
 
 function createCodeBlock(language: string, content: string, showLabel = true): HTMLPreElement {
@@ -481,6 +581,17 @@ export function deleteVisualTableColumn(table: HTMLTableElement, columnIndex: nu
   return true
 }
 
+export function deleteVisualTableColumnAtCell(
+  table: HTMLTableElement,
+  cell: HTMLTableCellElement,
+): HTMLTableCellElement | null {
+  const row = cell.parentElement
+  if (!(row instanceof HTMLTableRowElement) || !table.contains(cell)) return null
+  const targetIndex = Math.max(0, cell.cellIndex - 1)
+  if (!deleteVisualTableColumn(table, cell.cellIndex)) return cell
+  return row.cells.item(Math.min(targetIndex, row.cells.length - 1))
+}
+
 export function alignVisualTableColumn(
   table: HTMLTableElement,
   columnIndex: number,
@@ -495,6 +606,67 @@ export function alignVisualTableColumn(
     changed = true
   })
   return changed
+}
+
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+export function visualTableToCsv(table: HTMLTableElement): string {
+  return Array.from(table.rows).map(row => Array.from(row.cells).map(cell => csvCell((cell.innerText || cell.textContent || '').trim())).join(',')).join('\n')
+}
+
+export function parseCsvTable(source: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let value = ''
+  let quoted = false
+  for (let index = 0; index <= source.length; index++) {
+    const character = source[index] || '\n'
+    if (quoted) {
+      if (character === '"' && source[index + 1] === '"') { value += '"'; index += 1 }
+      else if (character === '"') quoted = false
+      else value += character
+      continue
+    }
+    if (character === '"' && !value) { quoted = true; continue }
+    if (character === ',') { row.push(value); value = ''; continue }
+    if (character === '\r' && source[index + 1] === '\n') continue
+    if (character === '\n') {
+      row.push(value); value = ''
+      if (row.some(cell => cell.length)) rows.push(row)
+      row = []
+      continue
+    }
+    value += character
+  }
+  return rows.slice(0, 100).map(current => current.slice(0, 30))
+}
+
+export function replaceVisualTableFromCsv(table: HTMLTableElement, source: string): HTMLTableCellElement | null {
+  const rows = parseCsvTable(source)
+  if (!rows.length) return null
+  const columnCount = Math.max(...rows.map(row => row.length))
+  const replacement = createVisualTable(Math.max(rows.length, 2), columnCount)
+  Array.from(replacement.rows).forEach((row, rowIndex) => Array.from(row.cells).forEach((cell, columnIndex) => {
+    cell.textContent = rows[rowIndex]?.[columnIndex] || ''
+    if (!cell.textContent) cell.appendChild(document.createElement('br'))
+  }))
+  table.replaceWith(replacement)
+  return replacement.querySelector('th,td')
+}
+
+export function sortVisualTableColumn(table: HTMLTableElement, columnIndex: number, direction: 'asc' | 'desc'): boolean {
+  const body = table.tBodies.item(0)
+  if (!body || columnIndex < 0) return false
+  const rows = Array.from(body.rows)
+  if (rows.length < 2) return false
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+  rows.sort((left, right) => direction === 'asc'
+    ? collator.compare(left.cells.item(columnIndex)?.textContent || '', right.cells.item(columnIndex)?.textContent || '')
+    : collator.compare(right.cells.item(columnIndex)?.textContent || '', left.cells.item(columnIndex)?.textContent || ''))
+  rows.forEach(row => body.appendChild(row))
+  return true
 }
 
 export function deleteVisualTable(
@@ -652,63 +824,6 @@ function placeCaretAtEnd(element: HTMLElement, selection = window.getSelection()
   selection.addRange(range)
 }
 
-function getElementPath(root: HTMLElement, element: HTMLElement): number[] | null {
-  if (root === element) return []
-  if (!root.contains(element)) return null
-  const path: number[] = []
-  let current: HTMLElement | null = element
-  while (current && current !== root) {
-    const parentElement: HTMLElement | null = current.parentElement
-    if (!parentElement) return null
-    const index = Array.from(parentElement.children).indexOf(current)
-    if (index < 0) return null
-    path.unshift(index)
-    current = parentElement
-  }
-  return current === root ? path : null
-}
-
-function getElementAtPath(root: HTMLElement, path: number[]): HTMLElement | null {
-  let current: HTMLElement = root
-  for (const index of path) {
-    const child = current.children.item(index)
-    if (!(child instanceof HTMLElement)) return null
-    current = child
-  }
-  return current
-}
-
-interface NativeBlockReplacement {
-  applied: boolean
-  target: HTMLElement | null
-}
-
-function replaceBlockContents(
-  root: HTMLElement | null,
-  block: HTMLElement,
-  replacementHtml: string,
-  selection = window.getSelection(),
-): NativeBlockReplacement {
-  if (!root || !selection?.rangeCount || !root.contains(block) || typeof document.execCommand !== 'function') {
-    return { applied: false, target: null }
-  }
-  const originalRange = selection.getRangeAt(0).cloneRange()
-  const targetPath = getElementPath(root, block)
-  if (!targetPath) return { applied: false, target: null }
-  const replacementRange = document.createRange()
-  replacementRange.selectNode(block)
-  root.focus()
-  selection.removeAllRanges()
-  selection.addRange(replacementRange)
-  if (!document.execCommand('insertHTML', false, replacementHtml)) {
-    selection.removeAllRanges()
-    selection.addRange(originalRange)
-    return { applied: false, target: null }
-  }
-  const inserted = getElementAtPath(root, targetPath)
-  return { applied: true, target: inserted }
-}
-
 export function insertParagraphAfterCodeBlock(
   root: HTMLElement | null,
   pre: HTMLPreElement,
@@ -781,25 +896,11 @@ export function updateCodeBlockLanguage(
     caretOffset = beforeCaret.toString().length
   }
 
-  const replacement = pre.cloneNode(true) as HTMLPreElement
-  setCodeBlockLanguage(replacement, language, showLabel)
-  const block = getCodeBlockContainer(pre)
-  let replacementBlock: HTMLElement = replacement
-  if (block !== pre) {
-    replacementBlock = block.cloneNode(true) as HTMLElement
-    replacementBlock.querySelector('pre')?.replaceWith(replacement)
-  }
-  const result = replaceBlockContents(root, block, replacementBlock.outerHTML, selection)
-  if (result.applied) {
-    const insertedCode = result.target?.querySelector<HTMLElement>('code')
-    if (insertedCode) setCaretByOffset(insertedCode, caretOffset)
-    root.focus()
-    return true
-  }
-
+  recordCodeLanguageChange(root, pre, language, caretOffset, showLabel, selection)
   setCodeBlockLanguage(pre, language, showLabel)
-  if (code) setCaretByOffset(code, caretOffset)
   root.focus()
+  const updatedCode = pre.querySelector<HTMLElement>('code')
+  if (updatedCode) setCaretByOffset(updatedCode, caretOffset)
   return true
 }
 
@@ -1021,8 +1122,8 @@ function selToString(): string {
   return sel && sel.rangeCount > 0 ? sel.toString() : ''
 }
 
-export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory }: MarkdownEditorProps) {
-  const { t } = useTranslation()
+export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory, onOpenWikiLink, onShare }: MarkdownEditorProps) {
+  const { t, locale } = useTranslation()
   const shortcutLabel = (label: string) => formatShortcutLabel(label, window.electronAPI.platform)
   const editorRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<Tab>('edit')
@@ -1043,6 +1144,8 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const [showLangPicker, setShowLangPicker] = useState(false)
   const [langFilter, setLangFilter] = useState('')
   const [tableTools, setTableTools] = useState<TableToolState | null>(null)
+  const [showAITransform, setShowAITransform] = useState(false)
+  const [aiTransformBusy, setAITransformBusy] = useState(false)
   const langPickerRef = useRef<HTMLDivElement>(null)
   const langSelectionRef = useRef<Range | null>(null)
   const editorWrapperRef = useRef<HTMLDivElement>(null)
@@ -1092,7 +1195,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     const wrapperRect = wrapper.getBoundingClientRect()
     const tableRect = table.getBoundingClientRect()
-    const toolbarWidth = Math.min(460, Math.max(280, wrapperRect.width - 16))
+    const toolbarWidth = Math.min(650, Math.max(280, wrapperRect.width - 16))
     const left = Math.max(8, Math.min(tableRect.left - wrapperRect.left, wrapperRect.width - toolbarWidth - 8))
     const top = Math.max(8, Math.min(tableRect.top - wrapperRect.top - 38, wrapperRect.height - 42))
     setTableTools({ cell, top, left })
@@ -1240,9 +1343,38 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
   }, [emitChange, readOnly, tableTools?.cell, updateTableTools])
 
+  const copyActiveTableCsv = useCallback(async () => {
+    const table = tableTools?.cell.closest('table')
+    if (!table) return
+    try { await window.electronAPI.writeClipboardText(visualTableToCsv(table)) }
+    catch (error) { console.error('Failed to copy table CSV:', error) }
+  }, [tableTools?.cell])
+
+  const pasteActiveTableCsv = useCallback(async () => {
+    const table = tableTools?.cell.closest('table')
+    if (!table || !editorRef.current) return
+    try {
+      const source = await window.electronAPI.readClipboardText()
+      const firstCell = replaceVisualTableFromCsv(table, source)
+      if (!firstCell) return
+      emitChange()
+      placeCaretAtStart(firstCell)
+      editorRef.current.focus()
+      window.requestAnimationFrame(() => updateTableTools(firstCell))
+    } catch (error) {
+      console.error('Failed to paste table CSV:', error)
+    }
+  }, [emitChange, tableTools?.cell, updateTableTools])
+
   const handleEditorMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
+    const wikiLink = target.closest<HTMLElement>('a.wiki-link[data-wiki-title]')
+    if (wikiLink?.dataset.wikiTitle && onOpenWikiLink) {
+      event.preventDefault()
+      onOpenWikiLink(wikiLink.dataset.wikiTitle)
+      return
+    }
     const heading = target.closest<HTMLElement>('h1,h2,h3,h4,h5,h6')
     if (heading && editorRef.current?.contains(heading)) {
       const rect = heading.getBoundingClientRect()
@@ -1264,7 +1396,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         setTableTools(null)
       }
     }
-  }, [])
+  }, [onOpenWikiLink])
 
   const handleCodeBlockClick = useCallback(() => {
     const sel = window.getSelection()
@@ -1348,7 +1480,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     const el = editorRef.current
     const saved = getCaretOffset(el)
-    const html = renderMarkdown(content, settings.showCodeLangLabel)
+    const html = renderMarkdown(content, settings.showCodeLangLabel, 'editable')
     if (el.innerHTML !== html) {
       el.innerHTML = html
       if (saved !== null) {
@@ -1642,6 +1774,62 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     emitChange()
   }, [emitChange])
 
+  const handleEditorInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
+    const inputType = (event.nativeEvent as InputEvent).inputType
+    if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+      syncCodeBlockLanguageHistory(editorRef.current)
+    }
+    emitChange()
+  }, [emitChange])
+
+  const handleAITransform = useCallback(async (action: AITransformAction) => {
+    if (aiTransformBusy || !isConfigured()) return
+    setShowAITransform(false)
+    const textarea = viewMode === 'source' ? sourceTaRef.current : null
+    const sourceSelection = textarea ? { start: textarea.selectionStart, end: textarea.selectionEnd } : null
+    const selection = window.getSelection()
+    const range = !textarea && selection?.rangeCount && selectionIsInside(editorRef.current, selection.getRangeAt(0))
+      ? selection.getRangeAt(0).cloneRange()
+      : null
+    const selectedText = textarea && sourceSelection
+      ? textarea.value.slice(sourceSelection.start, sourceSelection.end)
+      : range?.toString() || ''
+    if (!selectedText.trim()) {
+      window.alert(t.ai.selectTextFirst)
+      return
+    }
+    setAITransformBusy(true)
+    try {
+      const replacement = await transformAISelection(selectedText.slice(0, 12_000), action)
+      if (!replacement) return
+      if (textarea && sourceSelection) {
+        textarea.focus()
+        textarea.setSelectionRange(sourceSelection.start, sourceSelection.end)
+        if (!document.execCommand('insertText', false, replacement)) {
+          textarea.setRangeText(replacement, sourceSelection.start, sourceSelection.end, 'end')
+          textarea.dispatchEvent(new Event('input', { bubbles: true }))
+        }
+        onChange(textarea.value)
+      } else if (range && selection && editorRef.current?.contains(range.commonAncestorContainer)) {
+        editorRef.current.focus()
+        selection.removeAllRanges()
+        selection.addRange(range)
+        if (insertTextAtCursor(editorRef.current, replacement)) emitChange()
+      }
+    } catch (error) {
+      window.alert(`${t.ai.error}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setAITransformBusy(false)
+    }
+  }, [aiTransformBusy, emitChange, onChange, t.ai.error, t.ai.selectTextFirst, viewMode])
+
+  const handleWikiLinkEvent = useCallback((target: EventTarget | null): boolean => {
+    const anchor = target instanceof Element ? target.closest<HTMLElement>('a.wiki-link[data-wiki-title]') : null
+    if (!anchor?.dataset.wikiTitle || !onOpenWikiLink) return false
+    onOpenWikiLink(anchor.dataset.wikiTitle)
+    return true
+  }, [onOpenWikiLink])
+
   const wordCount = useMemo(() => countWords(content), [content])
   const lineCount = useMemo(() => content.split('\n').length, [content])
   const saveStateLabel = saveStatus?.state === 'saving'
@@ -1673,6 +1861,24 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       )}
     </>
   ) : null
+  const transformActions: Array<{ id: AITransformAction; zh: string; en: string }> = [
+    { id: 'polish', zh: '润色', en: 'Polish' },
+    { id: 'translate-zh', zh: '翻译为中文', en: 'Translate to Chinese' },
+    { id: 'translate-en', zh: '翻译为英文', en: 'Translate to English' },
+    { id: 'shorten', zh: '精简', en: 'Shorten' },
+    { id: 'expand', zh: '扩写', en: 'Expand' },
+    { id: 'summarize', zh: '总结', en: 'Summarize' },
+    { id: 'to-list', zh: '转换为列表', en: 'Convert to list' },
+    { id: 'to-table', zh: '转换为表格', en: 'Convert to table' },
+  ]
+  const aiTransformControls = isConfigured() ? (
+    <div className="editor-ai-transform">
+      <button className={`editor-tb-btn ${showAITransform ? 'active' : ''}`} disabled={aiTransformBusy} onMouseDown={event => event.preventDefault()} onClick={() => setShowAITransform(value => !value)} title={locale === 'zh' ? 'AI 处理选中文本' : 'AI transform selection'}>
+        <span className="editor-ai-label">AI</span>
+      </button>
+      {showAITransform && <div className="editor-ai-transform-menu">{transformActions.map(action => <button key={action.id} onMouseDown={event => event.preventDefault()} onClick={() => { void handleAITransform(action.id) }}>{locale === 'zh' ? action.zh : action.en}</button>)}</div>}
+    </div>
+  ) : null
 
   if (viewMode === 'preview') {
     return (
@@ -1686,6 +1892,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
               </svg>
               <span>{t.editor.edit}</span>
             </button>
+            {aiTransformControls}
           </div>
           <div className="editor-toolbar-spacer" />
           <span className="editor-mode-label">{t.editor.preview}</span>
@@ -1696,6 +1903,9 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         </div>
         <div
           className="editor-content editor-preview"
+          onClick={event => {
+            if (handleWikiLinkEvent(event.target)) event.preventDefault()
+          }}
           dangerouslySetInnerHTML={{ __html: renderMarkdown(content, settings.showCodeLangLabel) }}
         />
       </div>
@@ -1747,6 +1957,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
+            {aiTransformControls}
           </div>
           <div className="editor-toolbar-spacer" />
           <span className="editor-mode-label">{t.editor.source}</span>
@@ -1894,6 +2105,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
               <polyline points="7 8 12 3 17 8"/><polyline points="7 16 12 21 17 16"/><line x1="12" y1="3" x2="12" y2="21"/>
             </svg>
           </button>
+          {aiTransformControls}
         </div>
         <div className="editor-toolbar-spacer" />
         <div className="editor-toolbar-end">
@@ -1916,6 +2128,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
               </svg>
+            </button>
+          )}
+          {onShare && (
+            <button className="editor-tb-btn" onClick={onShare} title={locale === 'zh' ? '系统分享' : 'Share'}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></svg>
             </button>
           )}
           {onReadingMode && (
@@ -2005,17 +2222,17 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             <button
               title={t.editor.deleteTableColumn}
               disabled={(tableTools.cell.closest('table')?.rows.item(0)?.cells.length || 0) <= 1}
-              onClick={() => runTableAction((table, cell) => {
-                const targetIndex = Math.max(0, cell.cellIndex - 1)
-                if (!deleteVisualTableColumn(table, cell.cellIndex)) return cell
-                const row = cell.parentElement as HTMLTableRowElement
-                return row.cells.item(Math.min(targetIndex, row.cells.length - 1))
-              })}
+              onClick={() => runTableAction(deleteVisualTableColumnAtCell)}
             >−{t.editor.tableColumn}</button>
             <span className="table-visual-tools-divider" />
             <button title={t.editor.alignTableLeft} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'left') })}>L</button>
             <button title={t.editor.alignTableCenter} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'center') })}>C</button>
             <button title={t.editor.alignTableRight} onClick={() => runTableAction((table, cell) => { alignVisualTableColumn(table, cell.cellIndex, 'right') })}>R</button>
+            <span className="table-visual-tools-divider" />
+            <button title={locale === 'zh' ? '按当前列升序排序' : 'Sort current column ascending'} onClick={() => runTableAction((table, cell) => { sortVisualTableColumn(table, cell.cellIndex, 'asc') })}>A↑</button>
+            <button title={locale === 'zh' ? '按当前列降序排序' : 'Sort current column descending'} onClick={() => runTableAction((table, cell) => { sortVisualTableColumn(table, cell.cellIndex, 'desc') })}>A↓</button>
+            <button title={locale === 'zh' ? '复制表格为 CSV' : 'Copy table as CSV'} onClick={() => { void copyActiveTableCsv() }}>CSV↑</button>
+            <button title={locale === 'zh' ? '从剪贴板 CSV 替换表格' : 'Replace table from clipboard CSV'} onClick={() => { void pasteActiveTableCsv() }}>CSV↓</button>
             <span className="table-visual-tools-divider" />
             <button className="table-visual-tools-danger" title={t.editor.deleteTable} onClick={() => {
               const cell = tableTools.cell
@@ -2033,7 +2250,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           ref={editorRef}
           className="editor-content editor-wysiwyg"
           contentEditable={!readOnly}
-          onInput={emitChange}
+          onInput={handleEditorInput}
           onFocus={e => markEditorActive(e.currentTarget)}
           onKeyDown={handleKeyDown}
           onKeyUp={() => updateTableTools()}

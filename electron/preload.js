@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', Object.freeze({
   platform: process.platform,
@@ -31,8 +31,24 @@ contextBridge.exposeInMainWorld('electronAPI', Object.freeze({
     return () => ipcRenderer.removeListener('window-maximized-changed', handler)
   },
   searchAllNotes: query => ipcRenderer.invoke('notes:searchAll', query),
+  listNoteDocuments: () => ipcRenderer.invoke('notes:listDocuments'),
+  listBacklinks: title => ipcRenderer.invoke('notes:listBacklinks', title),
+  getPathForFile: file => webUtils.getPathForFile(file),
+  importMarkdownFile: filePath => ipcRenderer.invoke('notes:importMarkdown', filePath),
+  chooseAndImportMarkdownFile: () => ipcRenderer.invoke('notes:chooseAndImportMarkdown'),
   exportPDF: (html, title) => ipcRenderer.invoke('export:pdf', html, title),
   exportDOCX: (markdown, title) => ipcRenderer.invoke('export:docx', markdown, title),
+  shareNote: (title, content) => ipcRenderer.invoke('share:note', title, content),
+  onMenuCommand: callback => {
+    const handler = (_event, command) => callback(String(command))
+    ipcRenderer.on('menu-command', handler)
+    return () => ipcRenderer.removeListener('menu-command', handler)
+  },
+  getGitStatus: () => ipcRenderer.invoke('git:status'),
+  initializeGit: () => ipcRenderer.invoke('git:initialize'),
+  commitGit: message => ipcRenderer.invoke('git:commit', message),
+  getGitHistory: () => ipcRenderer.invoke('git:history'),
+  getGitDiff: () => ipcRenderer.invoke('git:diff'),
   getAIConfig: () => ipcRenderer.invoke('ai:getConfig'),
   configureAI: config => ipcRenderer.invoke('ai:configure', config),
   clearAIKey: () => ipcRenderer.invoke('ai:clearKey'),

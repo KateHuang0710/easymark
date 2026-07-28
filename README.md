@@ -53,6 +53,12 @@ npm audit
 
 ## 打包
 
+应用图标以 `build/icon-source-v2.png` 为规范源文件。更换源图后，先重新生成各平台图标：
+
+```bash
+python3 scripts/generate_icon.py
+```
+
 ```bash
 # 当前平台的 unpacked 应用
 npm run pack
