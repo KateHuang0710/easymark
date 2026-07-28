@@ -8,5 +8,8 @@ release/
 !.env.example
 build/icon.iconset/
 coverage/
+test-results/
+playwright-report/
+blob-report/
 .cache/
 __pycache__/

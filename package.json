@@ -8,6 +8,7 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test tests/*.test.cjs",
+    "test:e2e": "playwright test",
     "check": "npm run typecheck && npm run test && npm run build",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
@@ -73,6 +74,7 @@
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^6.0.4",
