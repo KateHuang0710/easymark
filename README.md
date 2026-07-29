@@ -84,7 +84,7 @@ macOS 签名、公证、unsigned 本地测试和发布检查见 [MACOS.md](./MAC
 
 - 笔记不会自动上传；只有用户主动调用 AI 功能时，相关提示和笔记上下文才会发送到用户配置的 API 服务。
 - API Key 不保存在 renderer 的 `localStorage`。
-- macOS 使用 Keychain、Windows 使用 DPAPI；Linux 的安全存储能力取决于桌面密钥环环境。若安全存储不可用，EasyMark 不会把 Key 明文写入磁盘，设置页会提示该 Key 仅本次运行有效。
+- 正式签名的 macOS 版本使用 Keychain，Windows 使用 DPAPI；Linux 的安全存储能力取决于桌面密钥环环境。未正式签名的 macOS 本地构建使用 Electron 的无弹窗开发凭据后端，Key 会加密持久化但安全等级低于系统钥匙串；若连本地加密能力也不可用，EasyMark 不会把 Key 明文写入磁盘，并会提示该 Key 仅本次运行有效。
 - 更换 API 服务的 origin 时必须重新输入 API Key，避免把旧凭据发送到意外端点。
 
 ## 安全设计

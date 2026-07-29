@@ -35,7 +35,7 @@ const schemeColors: Record<ColorScheme, string> = {
 
 export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
   const { t, locale, setLocale } = useTranslation()
-  const { settings, setTheme, setColorScheme, setAIConfig, setShowCodeLangLabel, setAiInlineCompletion, setDualPane, setReadingMode, aiEnabled, aiPersistedSecurely, refreshAIStatus } = useSettings()
+  const { settings, setTheme, setColorScheme, setAIConfig, setShowCodeLangLabel, setAiInlineCompletion, setDualPane, setReadingMode, aiEnabled, aiCredentialStorage, refreshAIStatus } = useSettings()
   const [tab, setTab] = useState<'appearance' | 'ai' | 'about'>('appearance')
   const [apiKeyDraft, setApiKeyDraft] = useState('')
   const [apiUrlDraft, setApiUrlDraft] = useState(settings.ai.apiUrl)
@@ -392,7 +392,14 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
                     )}
                     {aiEnabled && <span className="settings-connected">{t.ai.connected}</span>}
                   </div>
-                  {aiEnabled && !aiPersistedSecurely && (
+                  {aiEnabled && aiCredentialStorage === 'local' && (
+                    <p className="settings-hint settings-warning">
+                      {isZh
+                        ? 'API Key 已加密保存在此 Mac，重启后仍可使用。当前是未正式签名的本地构建，因此使用无弹窗的开发凭据后端；正式签名版会改用 macOS 钥匙串。'
+                        : 'The API key is encrypted on this Mac and remains available after restart. This locally built app uses the no-prompt development credential backend; a signed release uses macOS Keychain.'}
+                    </p>
+                  )}
+                  {aiEnabled && aiCredentialStorage === 'session' && (
                     <p className="settings-hint settings-warning">
                       {isZh
                         ? '当前系统无法提供安全凭据存储；API Key 仅在本次运行中使用，重启后需要重新输入。'

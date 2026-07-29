@@ -25,6 +25,8 @@ function installElectronStub() {
       configured: false,
       apiUrl: 'https://api.openai.com/v1',
       model: 'gpt-4o-mini',
+      credentialStorage: 'secure',
+      credentialPersisted: true,
       persistedSecurely: true,
     })),
     readClipboardText: vi.fn(async () => ''),

@@ -24,6 +24,12 @@ const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
 const { renameFileCaseSafely } = require('./case-rename')
 const { isAdHocCodeSignature } = require('./signing')
+const {
+  AI_CREDENTIAL_STORAGE,
+  canPersistAICredential,
+  getAICredentialStorageMode,
+  isValidEncryptedAICredential,
+} = require('./credential-storage')
 const { commitGit, getGitDiff, getGitHistory, getGitStatus, initializeGit } = require('./git-repository')
 
 function shouldUseMockKeychain() {
@@ -70,8 +76,11 @@ const DEFAULT_AI_MODEL = 'gpt-4o-mini'
 let aiConfig = { apiUrl: DEFAULT_AI_URL, model: DEFAULT_AI_MODEL, apiKey: '' }
 let encryptedAIKey = ''
 
-function secureCredentialStorageAvailable() {
-  return !usingMockKeychain && safeStorage.isEncryptionAvailable()
+function aiCredentialStorageMode() {
+  return getAICredentialStorageMode({
+    usingMockKeychain,
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+  })
 }
 
 function validateAIUrl(rawUrl) {
@@ -103,7 +112,7 @@ async function persistAIConfig(config) {
   const payload = { apiUrl: config.apiUrl, model: config.model }
   let nextEncryptedAIKey = encryptedAIKey
   if (config.apiKey) {
-    nextEncryptedAIKey = secureCredentialStorageAvailable()
+    nextEncryptedAIKey = canPersistAICredential(aiCredentialStorageMode())
       ? safeStorage.encryptString(config.apiKey).toString('base64')
       : ''
   }
@@ -119,10 +128,8 @@ async function loadAIConfig() {
     const raw = JSON.parse(await fs.promises.readFile(aiConfigPath(), 'utf8'))
     const apiUrl = validateAIUrl(raw.apiUrl || DEFAULT_AI_URL)
     const model = validateAIModel(raw.model || DEFAULT_AI_MODEL)
-    encryptedAIKey = secureCredentialStorageAvailable()
-      && typeof raw.encryptedApiKey === 'string'
-      && raw.encryptedApiKey.length <= 16384
-      && /^[A-Za-z0-9+/]+={0,2}$/.test(raw.encryptedApiKey)
+    encryptedAIKey = canPersistAICredential(aiCredentialStorageMode())
+      && isValidEncryptedAICredential(raw.encryptedApiKey)
       ? raw.encryptedApiKey
       : ''
     // Decrypt lazily when an AI request actually needs the key. macOS Keychain
@@ -136,7 +143,7 @@ async function loadAIConfig() {
 async function ensureAIKeyLoaded() {
   if (aiConfig.apiKey) return
   if (!encryptedAIKey) throw new Error('AI is not configured')
-  if (!secureCredentialStorageAvailable()) throw new Error('Secure credential storage is unavailable')
+  if (!canPersistAICredential(aiCredentialStorageMode())) throw new Error('Credential storage is unavailable')
   try {
     aiConfig = {
       ...aiConfig,
@@ -149,11 +156,16 @@ async function ensureAIKeyLoaded() {
 }
 
 function publicAIConfig() {
+  const credentialStorage = aiCredentialStorageMode()
+  const configured = Boolean(aiConfig.apiKey || encryptedAIKey)
   return {
-    configured: Boolean(aiConfig.apiKey || encryptedAIKey),
+    configured,
     apiUrl: aiConfig.apiUrl,
     model: aiConfig.model,
-    persistedSecurely: !(aiConfig.apiKey || encryptedAIKey) || secureCredentialStorageAvailable(),
+    credentialStorage,
+    credentialPersisted: !configured || canPersistAICredential(credentialStorage),
+    // Kept for renderer compatibility with older preload/type bundles.
+    persistedSecurely: !configured || credentialStorage === AI_CREDENTIAL_STORAGE.SECURE,
   }
 }
 

@@ -72,6 +72,8 @@ export interface AIConnectionConfig {
   configured: boolean
   apiUrl: string
   model: string
+  credentialStorage?: 'secure' | 'local' | 'session'
+  credentialPersisted?: boolean
   persistedSecurely?: boolean
 }
 

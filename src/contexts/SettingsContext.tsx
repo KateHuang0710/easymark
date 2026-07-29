@@ -31,7 +31,7 @@ interface SettingsContextType {
   setDualPane: (v: boolean) => void
   setReadingMode: (v: boolean) => void
   aiEnabled: boolean
-  aiPersistedSecurely: boolean
+  aiCredentialStorage: 'secure' | 'local' | 'session'
   refreshAIStatus: () => Promise<void>
 }
 
@@ -90,7 +90,7 @@ const SettingsContext = createContext<SettingsContextType | null>(null)
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [aiEnabled, setAiEnabled] = useState(false)
-  const [aiPersistedSecurely, setAiPersistedSecurely] = useState(true)
+  const [aiCredentialStorage, setAiCredentialStorage] = useState<'secure' | 'local' | 'session'>('session')
 
   useEffect(() => {
     saveSettings(settings)
@@ -111,7 +111,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     void initialize.then(config => {
       if (!active) return
       setAiEnabled(config.configured)
-      setAiPersistedSecurely(config.persistedSecurely !== false)
+      setAiCredentialStorage(config.credentialStorage || (config.persistedSecurely === false ? 'session' : 'secure'))
       setSettings(prev => ({
         ...prev,
         ai: { apiKey: '', apiUrl: config.apiUrl, model: config.model },
@@ -126,7 +126,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const refreshAIStatus = useCallback(async () => {
     const config = await initializeAI()
     setAiEnabled(config.configured)
-    setAiPersistedSecurely(config.persistedSecurely !== false)
+    setAiCredentialStorage(config.credentialStorage || (config.persistedSecurely === false ? 'session' : 'secure'))
     setSettings(prev => ({
       ...prev,
       ai: { apiKey: '', apiUrl: config.apiUrl, model: config.model },
@@ -165,7 +165,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     <SettingsContext.Provider value={{
       settings, setTheme, setColorScheme, setAIConfig,
       setShowCodeLangLabel, setAiInlineCompletion, setDualPane, setReadingMode,
-      aiEnabled, aiPersistedSecurely, refreshAIStatus
+      aiEnabled, aiCredentialStorage, refreshAIStatus
     }}>
       {children}
     </SettingsContext.Provider>

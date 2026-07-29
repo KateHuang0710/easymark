@@ -35,6 +35,8 @@ let connection: AIConnectionConfig = {
   configured: false,
   apiUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
+  credentialStorage: 'session',
+  credentialPersisted: false,
 }
 
 const SYSTEM_PROMPT = `You are EasyMark AI, an assistant inside a Markdown note-taking app.

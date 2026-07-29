@@ -11,7 +11,7 @@ localStorage.setItem('easymark-locale', 'zh')
 
 const api = {
   platform: 'darwin' as const,
-  getAIConfig: async () => ({ configured: false, apiUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', persistedSecurely: true }),
+  getAIConfig: async () => ({ configured: false, apiUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', credentialStorage: 'secure' as const, credentialPersisted: true, persistedSecurely: true }),
   readClipboardText: async () => '',
   writeClipboardText: async (_text: string) => undefined,
   saveImage: async (_dataUrl: string) => ({ filename: 'assets/test.png' }),

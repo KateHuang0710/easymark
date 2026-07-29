@@ -146,7 +146,7 @@ xcrun stapler validate "release/mac-arm64/EasyMark.app"
 - 粘贴 PNG/JPEG/GIF/WebP，并在重启后正常显示
 - 外部链接由默认浏览器打开
 - 恶意 Markdown 不执行脚本或事件处理器
-- API Key 重启后可读取；安全存储不可用时显示 session-only 提示
+- API Key 重启后可读取；ad-hoc 本地包使用无弹窗开发凭据后端并显示对应提示，Developer ID 正式签名包使用 Keychain；仅在加密能力完全不可用时显示 session-only 提示
 - PDF/DOCX 导出
 - Intel、Apple silicon 至少各做一次真机或 CI smoke test
 
