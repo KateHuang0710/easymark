@@ -54,6 +54,8 @@ CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac:universal
 
 公开分发应加入 Apple Developer Program，并在钥匙串安装 **Developer ID Application** 证书。不要使用 Mac Development、Apple Development 或 Mac App Distribution 证书代替。
 
+> 只有带 Apple 正式身份的签名版本才使用登录钥匙串。ad-hoc 本地包与未签名的开发运行使用 Electron 的无弹窗凭据后端，因此不会弹出钥匙串授权提示。
+
 检查可用身份：
 
 ```bash

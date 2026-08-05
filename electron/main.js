@@ -23,7 +23,7 @@ const { ensureRegularDirectory } = require('./safe-directory')
 const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
 const { renameFileCaseSafely } = require('./case-rename')
-const { isAdHocCodeSignature } = require('./signing')
+const { isDeveloperIdSigned } = require('./signing')
 const {
   AI_CREDENTIAL_STORAGE,
   canPersistAICredential,
@@ -33,12 +33,17 @@ const {
 const { commitGit, getGitDiff, getGitHistory, getGitStatus, initializeGit } = require('./git-repository')
 
 function shouldUseMockKeychain() {
-  if (process.platform !== 'darwin' || !app.isPackaged) return false
+  if (process.platform !== 'darwin') return false
   const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', process.execPath], {
     encoding: 'utf8',
     timeout: 2_000,
   })
-  return isAdHocCodeSignature(`${result.stdout || ''}\n${result.stderr || ''}`)
+  const details = `${result.stdout || ''}\n${result.stderr || ''}`
+  // Only real Apple-signed binaries can use the login Keychain without
+  // prompting. Ad-hoc packaged builds and unsigned dev binaries fall back to
+  // Electron's no-prompt credential backend so the app never asks for the
+  // Keychain password during development or local distribution.
+  return !isDeveloperIdSigned(details)
 }
 
 const usingMockKeychain = shouldUseMockKeychain()
