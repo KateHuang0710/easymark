@@ -16,6 +16,7 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('uses Chromium undo and redo for ordinary text edits', async ({ page }) => {
+  const primaryModifier = process.platform === 'darwin' ? 'Meta' : 'Control'
   const editor = page.locator('.editor-wysiwyg')
   await editor.click()
   await page.keyboard.press('End')
@@ -23,11 +24,11 @@ test('uses Chromium undo and redo for ordinary text edits', async ({ page }) => 
   await expect(editor).toContainText('Body changed')
   await expect(page.locator('#markdown-output')).toContainText('Body changed')
 
-  await page.keyboard.press('Meta+Z')
+  await page.keyboard.press(`${primaryModifier}+Z`)
   await expect(editor).toContainText('Body')
   await expect(editor).not.toContainText('changed')
 
-  await page.keyboard.press('Meta+Y')
+  await page.keyboard.press(`${primaryModifier}+Y`)
   await expect(editor).toContainText('Body changed')
 })
 
