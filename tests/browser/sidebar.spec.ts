@@ -67,6 +67,16 @@ test('keeps row actions in a menu and supports rename and pin', async ({ page })
   await expect(page.getByText('Renamed Meeting')).toBeVisible()
 })
 
+test('keeps the top-row action menu clickable above following notes', async ({ page }) => {
+  const row = page.getByRole('listitem').filter({ hasText: 'Project Plan' })
+  await row.getByRole('button', { name: /更多操作/ }).click()
+
+  const rename = page.getByRole('menuitem', { name: '重命名' })
+  await expect(rename).toBeVisible()
+  await rename.click()
+  await expect(page.locator('input.sidebar-rename-input')).toHaveValue('Project Plan')
+})
+
 test('cancels the create-note input with Escape', async ({ page }) => {
   const createButton = page.getByRole('button', { name: '新建笔记' }).first()
   await createButton.click()

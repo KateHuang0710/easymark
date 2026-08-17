@@ -330,7 +330,7 @@ export function Sidebar({
   const renderNote = (note: NoteSummary, index: number) => (
     <div
       key={note.id}
-      className={`sidebar-note ${currentNote?.id === note.id ? 'active' : ''} ${index >= visibleNotes.length - 2 ? 'sidebar-note-near-bottom' : ''}`}
+      className={`sidebar-note ${currentNote?.id === note.id ? 'active' : ''} ${menuNoteId === note.id ? 'menu-open' : ''} ${index >= visibleNotes.length - 2 ? 'sidebar-note-near-bottom' : ''}`}
       role="listitem"
       ref={currentNote?.id === note.id ? activeNoteRef : undefined}
       tabIndex={0}

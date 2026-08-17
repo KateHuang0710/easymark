@@ -212,6 +212,10 @@ select:focus-visible {
   transform: translateX(2px);
 }
 
+.sidebar-note.menu-open {
+  z-index: 30;
+}
+
 .sidebar-note.active {
   padding-left: 12px;
   background: linear-gradient(90deg, var(--accent-muted), color-mix(in srgb, var(--accent-muted) 35%, transparent));
