@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { normalizeMarkdownAssetUrl, renderMarkdown } from './markdown'
+import { highlightCode, normalizeMarkdownAssetUrl, renderMarkdown } from './markdown'
 
 describe('renderMarkdown security', () => {
   it('removes scripts and event-handler attributes', () => {
@@ -22,6 +22,15 @@ describe('renderMarkdown security', () => {
     expect(normalizeMarkdownAssetUrl('assets/image-1.png')).toBe('easymark-asset://local/image-1.png')
     expect(renderMarkdown('![image](assets/image-1.png)')).toContain('easymark-asset://local/image-1.png')
     expect(normalizeMarkdownAssetUrl('assets/../secret.png')).toBe('assets/../secret.png')
+  })
+
+  it('highlights core picker languages and their common aliases without bundling every grammar', () => {
+    expect(highlightCode('def demo():\n  return 1', 'python')).toContain('hljs-keyword')
+    // HTML is an alias exposed by the XML grammar, and JavaScript exposes `js`.
+    expect(highlightCode('<main>EasyMark</main>', 'html')).toContain('hljs-tag')
+    expect(highlightCode('const answer = 42', 'js')).toContain('hljs-keyword')
+    // Unknown/unsupported grammars remain safely escaped rather than throwing.
+    expect(highlightCode('<script>', 'not-a-real-language')).toContain('&lt;script&gt;')
   })
 
   it('keeps the rendered language label non-editable', () => {

@@ -22,7 +22,11 @@ function getCodeBlockLanguage(node: HTMLElement, code: HTMLElement | null): stri
   const explicitCodeLanguage = code?.getAttribute('data-lang')
   if (explicitCodeLanguage !== null && explicitCodeLanguage !== undefined) return explicitCodeLanguage
   const languageClass = Array.from(code?.classList || []).find(className => className.startsWith('language-'))
-  if (languageClass) return languageClass.slice('language-'.length)
+  if (languageClass) {
+    const language = languageClass.slice('language-'.length)
+    // `hljs` is Highlight.js' marker class, not a user-selected language.
+    if (language.toLowerCase() !== 'hljs') return language
+  }
   return node.getAttribute('data-lang') || ''
 }
 
@@ -33,7 +37,7 @@ turndown.addRule('codeblock', {
     const lang = getCodeBlockLanguage(node, code)
     // The rendered language label is a sibling inside <pre>; only code is data.
     const contentNode = code || node
-    const text = contentNode.innerText || contentNode.textContent || ''
+    const text = (contentNode.innerText || contentNode.textContent || '').replace(/\u200b/g, '')
     const longestFence = Math.max(0, ...Array.from(text.matchAll(/`+/g), match => match[0].length))
     const fence = '`'.repeat(Math.max(3, longestFence + 1))
     return fence + lang + '\n' + text + '\n' + fence + '\n\n'
@@ -137,16 +141,67 @@ function normalizeListNesting(html: string): string {
   return container.innerHTML
 }
 
+export function normalizeListDomNesting(root: HTMLElement | null): boolean {
+  if (!root) return false
+  let changed = false
+  for (const nestedList of Array.from(root.querySelectorAll<HTMLOListElement | HTMLUListElement>('ol > ol, ol > ul, ul > ol, ul > ul'))) {
+    const previous = nestedList.previousElementSibling
+    if (previous instanceof HTMLLIElement) {
+      previous.appendChild(nestedList)
+      changed = true
+    }
+  }
+  // Chromium can outdent from the normalized structure as <li><li>…</li></li>.
+  // A list item may contain a nested list, but never another direct list item.
+  for (const nestedItem of Array.from(root.querySelectorAll<HTMLLIElement>('li > li'))) {
+    const parentItem = nestedItem.parentElement
+    const parentList = parentItem?.parentElement
+    if (parentItem instanceof HTMLLIElement && parentList?.matches('ol,ul')) {
+      parentList.insertBefore(nestedItem, parentItem.nextSibling)
+      changed = true
+    }
+  }
+  return changed
+}
+
+export function normalizeListBlockStructure(root: HTMLElement | null): boolean {
+  if (!root) return false
+  let changed = false
+  const lists = Array.from(root.querySelectorAll<HTMLOListElement | HTMLUListElement>('p > ol, p > ul'))
+  for (const list of lists) {
+    const wrapper = list.parentElement
+    if (!wrapper || wrapper.tagName !== 'P' || !root.contains(wrapper) || !wrapper.parentNode) continue
+
+    const before = wrapper.cloneNode(false) as HTMLParagraphElement
+    const after = wrapper.cloneNode(false) as HTMLParagraphElement
+    while (wrapper.firstChild && wrapper.firstChild !== list) before.appendChild(wrapper.firstChild)
+    while (list.nextSibling) after.appendChild(list.nextSibling)
+
+    const fragment = document.createDocumentFragment()
+    if (hasMeaningfulNodeContent(before)) fragment.appendChild(before)
+    fragment.appendChild(list)
+    if (hasMeaningfulNodeContent(after)) fragment.appendChild(after)
+    wrapper.replaceWith(fragment)
+    changed = true
+  }
+  return changed
+}
+
 export function editorHtmlToMarkdown(html: string): string {
   return turndown.turndown(normalizeListNesting(html))
 }
 
 interface MarkdownEditorProps {
+  /** Stable note identity. Required by app callers to isolate editor history between notes with identical text. */
+  noteId?: string
+  /** Increment to return focus to this editor after an external note selection. */
+  focusRequestId?: number
   content: string
   onChange: (content: string) => void
   onSave: (content: string) => void | Promise<void>
   readOnly?: boolean
   onSplitRight?: () => void
+  canSplitRight?: boolean
   onExport?: () => void
   onSearchAll?: () => void
   onReadingMode?: () => void
@@ -165,6 +220,13 @@ interface TableToolState {
   cell: HTMLTableCellElement
   top: number
   left: number
+}
+
+interface ProgrammaticHistoryEntry {
+  before: string
+  after: string
+  beforeHtml?: string
+  afterHtml?: string
 }
 
 const AUTO_PAIRS: Record<string, string> = {
@@ -384,8 +446,17 @@ export function removeCodeBlockAtSelection(root: HTMLElement | null, selection =
   } else {
     const contentRange = document.createRange()
     contentRange.selectNodeContents(contentNode)
-    const coversAllContent = activeRange.compareBoundaryPoints(Range.START_TO_START, contentRange) <= 0
-      && activeRange.compareBoundaryPoints(Range.END_TO_END, contentRange) >= 0
+    // Chromium may normalize a selection made through highlighted <span>s so
+    // its boundary points are not directly comparable with the code element's
+    // range. Check the common element-boundary shape and selected text as well;
+    // otherwise Backspace turns the code block into an invalid <p> nested in
+    // <code> instead of removing the block.
+    const startsAtContentBoundary = activeRange.startContainer === contentNode && activeRange.startOffset === 0
+    const endsAtContentBoundary = activeRange.endContainer === contentNode && activeRange.endOffset === contentNode.childNodes.length
+    const coversAllContent = (activeRange.compareBoundaryPoints(Range.START_TO_START, contentRange) <= 0
+      && activeRange.compareBoundaryPoints(Range.END_TO_END, contentRange) >= 0)
+      || (startsAtContentBoundary && endsAtContentBoundary)
+      || activeRange.toString() === contentNode.textContent
     if (!coversAllContent) return false
   }
 
@@ -403,7 +474,7 @@ export function removeCodeBlockAtSelection(root: HTMLElement | null, selection =
     const applied = previous || next
       ? document.execCommand('delete')
       : document.execCommand('insertHTML', false, '<p><br></p>')
-    if (applied) {
+    if (applied && !block.isConnected) {
       if (previous?.isConnected) placeCaretAtEnd(previous as HTMLElement, selection)
       else if (next?.isConnected) placeCaretAtStart(next as HTMLElement, selection)
       else {
@@ -413,6 +484,11 @@ export function removeCodeBlockAtSelection(root: HTMLElement | null, selection =
       return true
     }
 
+    // Chromium can report success while inserting the replacement paragraph
+    // inside <code> instead of removing the wrapper. Restore the original
+    // selection when possible and let the structural fallback below cleanly
+    // remove the block.
+    if (!block.isConnected) return true
     selection.removeAllRanges()
     selection.addRange(originalRange)
   }
@@ -904,6 +980,30 @@ export function updateCodeBlockLanguage(
   return true
 }
 
+export function insertCodeNewlineAtSelection(
+  root: HTMLElement | null,
+  pre: HTMLPreElement,
+  selection = window.getSelection(),
+): boolean {
+  if (!root || !selection?.rangeCount || !root.contains(pre)) return false
+  const range = selection.getRangeAt(0)
+  const code = pre.querySelector<HTMLElement>('code')
+  if (!code || !selectionIsInside(code, range)) return false
+
+  range.deleteContents()
+  const newline = document.createTextNode('\n\u200b')
+  range.insertNode(newline)
+  // Keep the caret immediately after the newline and before a temporary zero-
+  // width anchor. At an element boundary Chromium inserts subsequent text
+  // before the newline and reverses the order.
+  range.setStart(newline, 1)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+  root.focus()
+  return true
+}
+
 export function insertParagraphAfterHeading(
   root: HTMLElement | null,
   heading: HTMLElement,
@@ -914,7 +1014,20 @@ export function insertParagraphAfterHeading(
   if (!isCaretAtEndOfElement(heading, activeRange)) return false
   // Prefer Chromium's native editing transaction so Command/Ctrl+Z can undo
   // both the paragraph creation and later typing in the expected order.
-  if (applyNativeEditingCommand(root, 'insertParagraph')) return true
+  if (applyNativeEditingCommand(root, 'insertParagraph')) {
+    // Chromium commonly creates a <div> after a heading. That is editable, but
+    // it is not a paragraph and can make subsequent heading/list operations
+    // appear to "jump" until React renders again. Normalize the newly created
+    // block with another native command so it remains part of the undo stack.
+    const active = selection.anchorNode?.nodeType === Node.ELEMENT_NODE
+      ? selection.anchorNode as Element
+      : selection.anchorNode?.parentElement
+    const insertedBlock = active?.closest('div')
+    if (insertedBlock && root.contains(insertedBlock) && insertedBlock !== root) {
+      applyNativeEditingCommand(root, 'formatBlock', 'p')
+    }
+    return true
+  }
 
   const paragraph = document.createElement('p')
   paragraph.appendChild(document.createElement('br'))
@@ -1022,6 +1135,19 @@ export function editTextIndent(
   }
 }
 
+function removeCodeCaretAnchors(root: HTMLElement | null): void {
+  if (!root) return
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+  let current: Node | null
+  while ((current = walker.nextNode())) {
+    if (current.parentElement?.closest('code') && current.nodeValue?.includes('\u200b')) {
+      textNodes.push(current as Text)
+    }
+  }
+  for (const node of textNodes) node.nodeValue = (node.nodeValue || '').replace(/\u200b/g, '')
+}
+
 function hasMeaningfulNodeContent(node: ParentNode): boolean {
   if ((node.textContent || '').replace(/[\s\u00a0\u200b]/g, '')) return true
   return Boolean(node.querySelector?.('img,hr,pre,table,ul,ol'))
@@ -1122,16 +1248,24 @@ function selToString(): string {
   return sel && sel.rangeCount > 0 ? sel.toString() : ''
 }
 
-export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRight, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory, onOpenWikiLink, onShare }: MarkdownEditorProps) {
+export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, onSave, readOnly, onSplitRight, canSplitRight = true, onExport, onSearchAll, onReadingMode, dualPaneMode, saveStatus, onRetrySave, onOpenHistory, onOpenWikiLink, onShare }: MarkdownEditorProps) {
   const { t, locale } = useTranslation()
   const shortcutLabel = (label: string) => formatShortcutLabel(label, window.electronAPI.platform)
   const editorRef = useRef<HTMLDivElement>(null)
   const [viewMode, setViewMode] = useState<Tab>('edit')
   const skipNextRender = useRef(false)
   const contentRef = useRef(content)
+  const previousContentPropRef = useRef(content)
+  const previousNoteIdRef = useRef(noteId)
+  const previousCodeLabelSettingRef = useRef<boolean | undefined>(undefined)
   const pendingContent = useRef('')
   const composingRef = useRef(false)
   const mountedRef = useRef(true)
+  // Toolbar/table operations mutate the contenteditable DOM directly. Keep a
+  // small Markdown-level history for those transactions so Cmd/Ctrl+Z and
+  // Cmd/Ctrl+Y behave consistently with native typing history.
+  const programmaticHistoryRef = useRef<{ undo: ProgrammaticHistoryEntry[]; redo: ProgrammaticHistoryEntry[] }>({ undo: [], redo: [] })
+  const pendingNativeHistoryRef = useRef<{ direction: 'undo' | 'redo'; before: string } | null>(null)
 
   useEffect(() => {
     mountedRef.current = true
@@ -1148,8 +1282,11 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const [aiTransformBusy, setAITransformBusy] = useState(false)
   const langPickerRef = useRef<HTMLDivElement>(null)
   const langSelectionRef = useRef<Range | null>(null)
+  const langTargetRef = useRef<HTMLPreElement | null>(null)
   const editorWrapperRef = useRef<HTMLDivElement>(null)
   const { settings } = useSettings()
+  const codeLabelSettingChanged = previousCodeLabelSettingRef.current !== settings.showCodeLangLabel
+  previousCodeLabelSettingRef.current = settings.showCodeLangLabel
 
   const COMMON_LANGS = [
     'python', 'javascript', 'typescript', 'html', 'css', 'cpp', 'c',
@@ -1166,6 +1303,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         setShowLangPicker(false)
         setLangFilter('')
         langSelectionRef.current = null
+        langTargetRef.current = null
       }
     }
     return addDeferredDocumentMouseDownListener(handler)
@@ -1232,6 +1370,53 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     onChange(md)
   }, [getMarkdown, onChange])
 
+  const clearProgrammaticHistory = useCallback(() => {
+    programmaticHistoryRef.current.undo = []
+    programmaticHistoryRef.current.redo = []
+    pendingNativeHistoryRef.current = null
+  }, [])
+
+  const recordProgrammaticHistory = useCallback((
+    before: string,
+    after: string,
+    html?: { beforeHtml?: string; afterHtml?: string },
+  ) => {
+    if (before === after) return
+    const history = programmaticHistoryRef.current
+    history.undo.push({ before, after, ...html })
+    history.redo = []
+    if (history.undo.length > 50) history.undo.shift()
+  }, [])
+
+  const restoreProgrammaticHistory = useCallback((direction: 'undo' | 'redo'): boolean => {
+    const root = editorRef.current
+    const history = programmaticHistoryRef.current
+    const source = direction === 'undo' ? history.undo : history.redo
+    const target = direction === 'undo' ? history.redo : history.undo
+    const entry = source[source.length - 1]
+    if (!root || !entry) return false
+
+    const current = getMarkdown()
+    const expected = direction === 'undo' ? entry.after : entry.before
+    // Native edits can sit on top of a programmatic table/code action. Keep
+    // the Markdown-level entry until Chromium has undone those native edits and
+    // the document matches the snapshot again.
+    if (current !== expected) return false
+
+    source.pop()
+    target.push(entry)
+    const nextContent = direction === 'undo' ? entry.before : entry.after
+    const nextHtml = direction === 'undo' ? entry.beforeHtml : entry.afterHtml
+    root.innerHTML = nextHtml || renderMarkdown(nextContent, settings.showCodeLangLabel, 'editable')
+    contentRef.current = nextContent
+    pendingContent.current = nextContent
+    skipNextRender.current = true
+    onChange(nextContent)
+    root.focus()
+    placeCaretAtEnd(root)
+    return true
+  }, [clearProgrammaticHistory, getMarkdown, onChange, settings.showCodeLangLabel])
+
   function execFormatBlock(tagName: string): boolean {
     return applyBlockFormat(editorRef.current, tagName)
   }
@@ -1258,12 +1443,24 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       case 'formatBlock':
         if (val) execFormatBlock(val.replace(/[<>]/g, ''))
         break
-      case 'insertUnorderedList':
-        applyNativeEditingCommand(el, 'insertUnorderedList')
+      case 'insertUnorderedList': {
+        const before = getMarkdown()
+        if (applyNativeEditingCommand(el, 'insertUnorderedList')) {
+          normalizeListDomNesting(el)
+          normalizeListBlockStructure(el)
+          recordProgrammaticHistory(before, getMarkdown())
+        }
         break
-      case 'insertOrderedList':
-        applyNativeEditingCommand(el, 'insertOrderedList')
+      }
+      case 'insertOrderedList': {
+        const before = getMarkdown()
+        if (applyNativeEditingCommand(el, 'insertOrderedList')) {
+          normalizeListDomNesting(el)
+          normalizeListBlockStructure(el)
+          recordProgrammaticHistory(before, getMarkdown())
+        }
         break
+      }
       case 'insertText':
         if (val) insertTextAtCursor(el, val)
         break
@@ -1292,7 +1489,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     }
     emitChange()
     el?.focus()
-  }, [emitChange])
+  }, [emitChange, getMarkdown, recordProgrammaticHistory])
 
   const insertInlineCode = useCallback(() => {
     if (insertInlineElement(editorRef.current, 'code')) emitChange()
@@ -1314,15 +1511,18 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
   const insertTable = useCallback(() => {
     if (readOnly) return
+    const before = getMarkdown()
     const table = insertTableAtSelection(editorRef.current)
     if (!table) {
       editorRef.current?.focus()
       return
     }
+    const after = getMarkdown()
+    recordProgrammaticHistory(before, after)
     emitChange()
     const firstCell = table.querySelector<HTMLTableCellElement>('th,td')
     window.requestAnimationFrame(() => updateTableTools(firstCell))
-  }, [emitChange, readOnly, updateTableTools])
+  }, [emitChange, getMarkdown, readOnly, recordProgrammaticHistory, updateTableTools])
 
   const runTableAction = useCallback((action: (table: HTMLTableElement, cell: HTMLTableCellElement) => HTMLTableCellElement | null | void) => {
     if (readOnly) return
@@ -1332,7 +1532,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       setTableTools(null)
       return
     }
+    const before = getMarkdown()
     const nextCell = action(table, cell) || cell
+    const after = getMarkdown()
+    recordProgrammaticHistory(before, after)
     emitChange()
     if (nextCell instanceof HTMLTableCellElement && nextCell.isConnected) {
       placeCaretAtStart(nextCell)
@@ -1341,7 +1544,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     } else {
       setTableTools(null)
     }
-  }, [emitChange, readOnly, tableTools?.cell, updateTableTools])
+  }, [emitChange, getMarkdown, readOnly, recordProgrammaticHistory, tableTools?.cell, updateTableTools])
 
   const copyActiveTableCsv = useCallback(async () => {
     const table = tableTools?.cell.closest('table')
@@ -1354,9 +1557,12 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     const table = tableTools?.cell.closest('table')
     if (!table || !editorRef.current) return
     try {
+      const before = getMarkdown()
       const source = await window.electronAPI.readClipboardText()
       const firstCell = replaceVisualTableFromCsv(table, source)
       if (!firstCell) return
+      const after = getMarkdown()
+      recordProgrammaticHistory(before, after)
       emitChange()
       placeCaretAtStart(firstCell)
       editorRef.current.focus()
@@ -1364,7 +1570,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     } catch (error) {
       console.error('Failed to paste table CSV:', error)
     }
-  }, [emitChange, tableTools?.cell, updateTableTools])
+  }, [emitChange, getMarkdown, recordProgrammaticHistory, tableTools?.cell, updateTableTools])
 
   const handleEditorMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -1414,12 +1620,14 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
   const toggleLanguagePicker = useCallback(() => {
     if (showLangPicker) {
       langSelectionRef.current = null
+      langTargetRef.current = null
       setShowLangPicker(false)
       return
     }
     const selection = window.getSelection()
     const range = selection?.rangeCount ? selection.getRangeAt(0) : null
     langSelectionRef.current = range && selectionIsInside(editorRef.current, range) ? range.cloneRange() : null
+    langTargetRef.current = range ? closestCodeBlock(range.startContainer) : null
     setShowLangPicker(true)
   }, [showLangPicker])
 
@@ -1428,18 +1636,37 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     setLangFilter('')
     const sel = window.getSelection()
     const range = langSelectionRef.current
+    const target = langTargetRef.current
     langSelectionRef.current = null
-    if (!sel || !range || !selectionIsInside(editorRef.current, range)) return
-    sel.removeAllRanges()
-    sel.addRange(range)
-    if (!selectionIsInside(editorRef.current, range)) { editorRef.current?.focus(); return }
-    const existingCodeBlock = closestCodeBlock(range.startContainer)
-    if (existingCodeBlock && editorRef.current?.contains(existingCodeBlock)) {
-      if (updateCodeBlockLanguage(editorRef.current, existingCodeBlock, lang, settings.showCodeLangLabel, sel)) emitChange()
+    langTargetRef.current = null
+    if (!sel || !editorRef.current) return
+
+    // Keep a direct reference to the selected <pre> as well as its Range. A
+    // language change re-highlights the code and Chromium can invalidate the
+    // saved Range; the target ref lets clearing/changing the language still
+    // operate on the same block instead of silently keeping the old language.
+    const existingCodeBlock = target && editorRef.current.contains(target)
+      ? target
+      : range && selectionIsInside(editorRef.current, range)
+        ? closestCodeBlock(range.startContainer)
+        : null
+    if (existingCodeBlock && editorRef.current.contains(existingCodeBlock)) {
+      if (range && selectionIsInside(editorRef.current, range)) {
+        sel.removeAllRanges()
+        sel.addRange(range)
+      } else {
+        const code = existingCodeBlock.querySelector<HTMLElement>('code') || existingCodeBlock
+        placeCaretAtEnd(code, sel)
+      }
+      const before = getMarkdown()
+      if (updateCodeBlockLanguage(editorRef.current, existingCodeBlock, lang, settings.showCodeLangLabel, sel)) {
+        recordProgrammaticHistory(before, getMarkdown())
+        emitChange()
+      }
       return
     }
     if (insertCodeBlockAtSelection(editorRef.current, lang, settings.showCodeLangLabel, sel)) emitChange()
-  }, [emitChange, settings.showCodeLangLabel])
+  }, [emitChange, getMarkdown, recordProgrammaticHistory, settings.showCodeLangLabel])
 
   const { menu: ctxMenu, handleContextMenu, closeMenu } = useEditorContextMenu(
     editorRef, execFormat, insertInlineCode, insertLink, emitChange,
@@ -1466,10 +1693,32 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
     editorRef.current.focus()
   }, [emitChange])
 
+  const contentPropChanged = previousContentPropRef.current !== content
+  const noteIdentityChanged = previousNoteIdRef.current !== noteId
+  previousContentPropRef.current = content
+  previousNoteIdRef.current = noteId
   contentRef.current = content
 
   useEffect(() => {
-    if (!editorRef.current || viewMode !== 'edit') return
+    if (!focusRequestId || readOnly || viewMode === 'preview') return
+    const frame = requestAnimationFrame(() => {
+      const target = viewMode === 'source' ? sourceTaRef.current : editorRef.current
+      if (!target || target.offsetParent === null) return
+      target.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusRequestId, readOnly, viewMode])
+
+  useEffect(() => {
+    if (!editorRef.current) return
+    const el = editorRef.current
+    const currentMarkdown = getMarkdown()
+    const isEchoOfCurrentEditor = contentPropChanged && currentMarkdown === content
+    // Notes can legitimately have identical Markdown. Clear editor-only state
+    // by stable note identity as well as by an external content replacement so
+    // Cmd/Ctrl+Z from note A can never modify a just-opened note B.
+    if (noteIdentityChanged || (contentPropChanged && !skipNextRender.current && content !== pendingContent.current && !isEchoOfCurrentEditor)) clearProgrammaticHistory()
+    if (viewMode !== 'edit') return
     if (skipNextRender.current) {
       skipNextRender.current = false
       if (content === pendingContent.current) {
@@ -1478,16 +1727,21 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
       pendingContent.current = ''
     }
-    const el = editorRef.current
+    // Parent state can echo a DOM transaction while React is also re-rendering
+    // the language picker. If the Markdown is already identical, preserve the
+    // live editor DOM (and its selection/history markers) instead of replacing
+    // the <pre>, which would invalidate the saved code-block target. Re-render
+    // only when the code-label setting itself changed.
+    if (currentMarkdown === content && !codeLabelSettingChanged && !noteIdentityChanged) return
     const saved = getCaretOffset(el)
     const html = renderMarkdown(content, settings.showCodeLangLabel, 'editable')
-    if (el.innerHTML !== html) {
+    if (noteIdentityChanged || el.innerHTML !== html) {
       el.innerHTML = html
       if (saved !== null) {
         try { setCaretByOffset(el, saved) } catch {}
       }
     }
-  }, [content, settings.showCodeLangLabel, viewMode])
+  }, [clearProgrammaticHistory, codeLabelSettingChanged, content, contentPropChanged, getMarkdown, noteIdentityChanged, settings.showCodeLangLabel, viewMode])
 
   useEffect(() => {
     if (viewMode === 'edit') return
@@ -1514,8 +1768,14 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       const shortcutKey = e.key.toLowerCase()
       const historyShortcut = getHistoryShortcut(shortcutKey, e.shiftKey)
       if (historyShortcut) {
-        // Chromium owns the native Z history shortcuts. Intercepting them before
-        // the contenteditable input event prevents its undo stack from applying.
+        // Prefer the Markdown-level stack for direct DOM transactions such as
+        // visual-table edits. Ordinary typing continues to use Chromium's
+        // native history, including Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z.
+        if (restoreProgrammaticHistory(historyShortcut)) {
+          e.preventDefault()
+          return
+        }
+        pendingNativeHistoryRef.current = { direction: historyShortcut, before: getMarkdown() }
         if (shortcutKey === 'z') return
         e.preventDefault()
         applyNativeEditingCommand(editorRef.current, historyShortcut)
@@ -1584,8 +1844,13 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         : anchor?.parentElement?.closest('th,td') as HTMLTableCellElement | null
       const table = tableCell?.closest('table')
       if (tableCell && table && editorRef.current?.contains(table)) {
+        const before = getMarkdown()
         const result = moveAcrossVisualTable(table, tableCell, e.shiftKey, selection)
-        if (result.changed) emitChange()
+        if (result.changed) {
+          const after = getMarkdown()
+          recordProgrammaticHistory(before, after)
+          emitChange()
+        }
         if (result.cell) window.requestAnimationFrame(() => updateTableTools(result.cell))
         return
       }
@@ -1593,7 +1858,13 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         ? (anchor as HTMLElement).closest('li')
         : anchor?.parentElement?.closest('li')
       if (listItem && editorRef.current?.contains(listItem)) {
-        if (applyNativeEditingCommand(editorRef.current, e.shiftKey ? 'outdent' : 'indent')) emitChange()
+        const before = getMarkdown()
+        if (applyNativeEditingCommand(editorRef.current, e.shiftKey ? 'outdent' : 'indent')) {
+          normalizeListDomNesting(editorRef.current)
+          normalizeListBlockStructure(editorRef.current)
+          recordProgrammaticHistory(before, getMarkdown())
+          emitChange()
+        }
         return
       }
       execFormat('insertText', '    ')
@@ -1611,10 +1882,15 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         if (pre) {
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
+            removeCodeCaretAnchors(editorRef.current)
             if (insertParagraphAfterCodeBlock(editorRef.current, pre as HTMLPreElement, sel)) emitChange()
           } else {
             e.preventDefault()
-            if (insertTextAtCursor(editorRef.current, '\n')) emitChange()
+            const before = getMarkdown()
+            if (insertCodeNewlineAtSelection(editorRef.current, pre as HTMLPreElement, sel)) {
+              recordProgrammaticHistory(before, getMarkdown())
+              emitChange()
+            }
           }
           return
         }
@@ -1633,10 +1909,19 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           ? (node as HTMLElement).closest('li')
           : node.parentElement?.closest('li')
         if (li) {
-          // Chromium already provides the expected undoable list behavior:
-          // Enter creates the next item, Shift+Enter stays in the same item,
-          // and Enter on an empty item exits the list. Do not serialize during
-          // keydown, because doing so races the native DOM mutation.
+          if (!e.shiftKey && !(li.textContent || '').replace(/[\s\u00a0\u200b]/g, '')) {
+            e.preventDefault()
+            const before = getMarkdown()
+            const beforeHtml = editorRef.current?.innerHTML
+            if (applyNativeEditingCommand(editorRef.current, 'outdent')) {
+              applyNativeEditingCommand(editorRef.current, 'formatBlock', 'p')
+              normalizeListBlockStructure(editorRef.current)
+              recordProgrammaticHistory(before, getMarkdown(), { beforeHtml, afterHtml: editorRef.current?.innerHTML })
+              emitChange()
+            }
+          }
+          // Chromium provides undoable continuation and soft breaks for
+          // non-empty items; only empty-item exit needs structural cleanup.
           return
         }
         const h = node.nodeType === Node.ELEMENT_NODE
@@ -1664,7 +1949,14 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
           // Native Backspace merges an empty item into the previous list item.
           // Outdent instead produces an undoable normal paragraph for body text.
           e.preventDefault()
-          if (applyNativeEditingCommand(editorRef.current, 'outdent')) emitChange()
+          const before = getMarkdown()
+          const beforeHtml = editorRef.current?.innerHTML
+          if (applyNativeEditingCommand(editorRef.current, 'outdent')) {
+            applyNativeEditingCommand(editorRef.current, 'formatBlock', 'p')
+            normalizeListBlockStructure(editorRef.current)
+            recordProgrammaticHistory(before, getMarkdown(), { beforeHtml, afterHtml: editorRef.current?.innerHTML })
+            emitChange()
+          }
         }
         return
       }
@@ -1705,7 +1997,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
     }
 
-  }, [handleSave, emitChange, execFormat, insertBlock, insertInlineCode, insertLink, handleCodeBlockClick, updateTableTools])
+  }, [handleSave, emitChange, execFormat, getMarkdown, insertBlock, insertInlineCode, insertLink, handleCodeBlockClick, recordProgrammaticHistory, restoreProgrammaticHistory, updateTableTools])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = e.clipboardData.items
@@ -1776,11 +2068,35 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
   const handleEditorInput = useCallback((event: React.FormEvent<HTMLDivElement>) => {
     const inputType = (event.nativeEvent as InputEvent).inputType
+    const pendingNativeHistory = pendingNativeHistoryRef.current
+    pendingNativeHistoryRef.current = null
+
     if (inputType === 'historyUndo' || inputType === 'historyRedo') {
       syncCodeBlockLanguageHistory(editorRef.current)
+      removeCodeCaretAnchors(editorRef.current)
+      const after = getMarkdown()
+      if (pendingNativeHistory && pendingNativeHistory.before !== after) {
+        const history = programmaticHistoryRef.current
+        if (pendingNativeHistory.direction === 'undo') {
+          // Chromium has already undone this native transaction. Preserve an
+          // equivalent Markdown snapshot so redo still works after a table/code
+          // transaction re-renders the contenteditable and clears native redo.
+          history.redo.push({ before: after, after: pendingNativeHistory.before })
+          if (history.redo.length > 50) history.redo.shift()
+        } else {
+          history.undo.push({ before: pendingNativeHistory.before, after })
+          if (history.undo.length > 50) history.undo.shift()
+        }
+      }
+    } else {
+      removeCodeCaretAnchors(editorRef.current)
+      // A fresh native edit invalidates redo, but must not discard earlier
+      // programmatic actions that should become undoable once native edits are
+      // undone first.
+      programmaticHistoryRef.current.redo = []
     }
     emitChange()
-  }, [emitChange])
+  }, [emitChange, getMarkdown])
 
   const handleAITransform = useCallback(async (action: AITransformAction) => {
     if (aiTransformBusy || !isConfigured()) return
@@ -1914,6 +2230,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
 
   if (viewMode === 'source') {
     const handleSourceChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      clearProgrammaticHistory()
       onChange(e.target.value)
     }
 
@@ -1924,7 +2241,10 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         const ta = e.currentTarget
         const edit = editTextIndent(ta.value, ta.selectionStart, ta.selectionEnd, e.shiftKey)
         applyTextAreaEdit(ta, edit)
-        if (ta.value !== contentRef.current) onChange(ta.value)
+        if (ta.value !== contentRef.current) {
+          clearProgrammaticHistory()
+          onChange(ta.value)
+        }
         return
       }
       if ((e.ctrlKey || e.metaKey) && shortcutKey === 's') {
@@ -1934,6 +2254,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
       }
       if ((e.ctrlKey || e.metaKey) && shortcutKey === 'y') {
         e.preventDefault()
+        clearProgrammaticHistory()
         const textarea = e.currentTarget
         if (typeof document.execCommand === 'function') document.execCommand('redo')
         window.setTimeout(() => onChange(textarea.value), 0)
@@ -2051,7 +2372,7 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
                     placeholder={t.editor.filterLanguages}
                     autoFocus
                     onKeyDown={e => {
-                      if (e.key === 'Escape') { setShowLangPicker(false); setLangFilter(''); langSelectionRef.current = null }
+                      if (e.key === 'Escape') { setShowLangPicker(false); setLangFilter(''); langSelectionRef.current = null; langTargetRef.current = null }
                       if (e.key === 'Enter' && langFilter.trim()) {
                         handleLangSelect(langFilter.trim().toLowerCase())
                       }
@@ -2059,6 +2380,13 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
                   />
                 </div>
                 <div className="lang-picker-list">
+                  <button
+                    className="lang-picker-item lang-picker-no-language"
+                    onClick={() => handleLangSelect('')}
+                    onMouseDown={e => e.preventDefault()}
+                  >
+                    {t.editor.noLanguage}
+                  </button>
                   {COMMON_LANGS
                     .filter(l => !langFilter || l.includes(langFilter.toLowerCase()))
                     .map(lang => (
@@ -2110,7 +2438,13 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
         <div className="editor-toolbar-spacer" />
         <div className="editor-toolbar-end">
           {!dualPaneMode && onSplitRight && (
-            <button className="editor-tb-btn" onClick={onSplitRight} title={t.editor.splitRight}>
+            <button
+              className="editor-tb-btn"
+              onClick={onSplitRight}
+              title={canSplitRight ? t.editor.splitRight : t.editor.needSecondNote}
+              aria-label={canSplitRight ? t.editor.splitRight : t.editor.needSecondNote}
+              disabled={!canSplitRight}
+            >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/>
               </svg>
@@ -2237,7 +2571,9 @@ export function MarkdownEditor({ content, onChange, onSave, readOnly, onSplitRig
             <button className="table-visual-tools-danger" title={t.editor.deleteTable} onClick={() => {
               const cell = tableTools.cell
               const table = cell.closest('table')
+              const before = getMarkdown()
               if (table && deleteVisualTable(editorRef.current, table)) {
+                recordProgrammaticHistory(before, getMarkdown())
                 emitChange()
                 setTableTools(null)
               }

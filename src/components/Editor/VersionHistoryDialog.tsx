@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from '../../i18n'
 import * as storage from '../../services/storage'
 import { NoteVersion } from '../../types'
+import { useDialogFocus } from '../../hooks/useDialogFocus'
 
 interface VersionHistoryDialogProps {
   visible: boolean
@@ -27,6 +28,8 @@ export function VersionHistoryDialog({ visible, filename, title, onClose, onRest
   const [restored, setRestored] = useState(false)
   const listRequestRef = useRef(0)
   const previewRequestRef = useRef(0)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useDialogFocus(visible && Boolean(filename), dialogRef)
 
   const loadVersions = useCallback(async (noteFilename: string) => {
     const requestId = ++listRequestRef.current
@@ -118,10 +121,12 @@ export function VersionHistoryDialog({ visible, filename, title, onClose, onRest
   return (
     <div className="settings-overlay" onClick={() => { if (!restoring) onClose() }}>
       <div
+        ref={dialogRef}
         className="version-history-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={`${t.editor.versionHistory}: ${title}`}
+        tabIndex={-1}
         onClick={event => event.stopPropagation()}
       >
         <div className="version-history-header">

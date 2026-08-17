@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { NoteSummary } from '../types'
 import { useTranslation } from '../i18n'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 
 export type AppCommand = 'new-note' | 'open-markdown' | 'search-all' | 'toggle-ai' | 'share-note' | 'export-note' | 'git-panel' | 'toggle-pin' | 'toggle-favorite'
 
@@ -18,6 +19,8 @@ export function CommandPalette({ visible, notes, onClose, onOpenNote, onCommand 
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useDialogFocus(visible, dialogRef, inputRef)
   const commands = useMemo(() => [
     { id: 'new-note' as const, label: isZh ? '新建笔记' : 'New note', shortcut: '⌘N' },
     { id: 'open-markdown' as const, label: isZh ? '打开 Markdown 文件' : 'Open Markdown file', shortcut: '⌘O' },
@@ -64,7 +67,15 @@ export function CommandPalette({ visible, notes, onClose, onOpenNote, onCommand 
 
   return (
     <div className="command-palette-overlay" onMouseDown={onClose}>
-      <div className="command-palette" role="dialog" aria-modal="true" onMouseDown={event => event.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isZh ? '命令面板' : 'Command palette'}
+        tabIndex={-1}
+        onMouseDown={event => event.stopPropagation()}
+      >
         <input
           ref={inputRef}
           className="command-palette-input"

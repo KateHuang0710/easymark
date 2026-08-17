@@ -447,7 +447,10 @@ function createWindow() {
     backgroundColor: '#1B1B20',
     show: false,
   }
-  if (!isMac) windowOptions.icon = path.join(__dirname, '../build/icon.ico')
+  if (!isMac) {
+    const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon-512x512.png'
+    windowOptions.icon = path.join(__dirname, '../build', iconName)
+  }
 
   mainWindow = new BrowserWindow(windowOptions)
   configureNavigationGuards(mainWindow)

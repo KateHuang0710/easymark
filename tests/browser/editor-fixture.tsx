@@ -32,17 +32,43 @@ if (!window.matchMedia) {
 }
 
 function Fixture() {
-  const [content, setContent] = useState('Body')
+  const [activeNoteId, setActiveNoteId] = useState<'note-a' | 'note-b'>('note-a')
+  const [noteContent, setNoteContent] = useState({
+    'note-a': 'Body',
+    'note-b': 'Body',
+  })
+  const content = noteContent[activeNoteId]
+  const loadIdenticalCodeNotes = () => {
+    setNoteContent({
+      'note-a': '```\nconst value = 1\n```',
+      // This deliberately matches note A after assigning Python. It verifies
+      // editor-local undo history cannot leak when two notes share text.
+      'note-b': '```python\nconst value = 1\n```',
+    })
+    setActiveNoteId('note-a')
+  }
   return (
     <I18nProvider>
       <SettingsProvider>
-        <MarkdownEditor content={content} onChange={next => {
-          setContent(next)
+        <button type="button" data-testid="load-identical-code-notes" onClick={loadIdenticalCodeNotes}>
+          Load identical code notes
+        </button>
+        <button
+          type="button"
+          data-testid="switch-identical-note"
+          onClick={() => setActiveNoteId(current => current === 'note-a' ? 'note-b' : 'note-a')}
+        >
+          Switch identical note
+        </button>
+        <div data-testid="active-note">{activeNoteId}</div>
+        <MarkdownEditor noteId={activeNoteId} content={content} onChange={next => {
+          setNoteContent(current => ({ ...current, [activeNoteId]: next }))
           document.querySelector('#markdown-output')!.textContent = next
         }} onSave={() => undefined} />
       </SettingsProvider>
     </I18nProvider>
   )
 }
+
 
 createRoot(document.querySelector('#root')!).render(<Fixture />)

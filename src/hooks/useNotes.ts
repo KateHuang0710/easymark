@@ -62,6 +62,18 @@ export function useNotes() {
     }
   }, [])
 
+  const refreshAfterMutation = useCallback(async () => {
+    try {
+      await refreshList()
+    } catch (error) {
+      // The filesystem mutation already succeeded. Keep the optimistic UI
+      // state and expose the refresh failure for the existing retry action; a
+      // failed directory listing must not make create/rename/delete look like
+      // failed operations to their callers.
+      console.error('Failed to refresh notes after mutation:', error)
+    }
+  }, [refreshList])
+
   const flushAutoSave = useCallback(async () => {
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current)
@@ -79,16 +91,18 @@ export function useNotes() {
     void saveQueueRef.current?.flush().catch(error => console.error('Final auto-save failed:', error))
   }, [])
 
-  const openNote = useCallback(async (note: NoteSummary) => {
+  const openNote = useCallback(async (note: NoteSummary): Promise<Note | null> => {
     const requestId = ++openRequestRef.current
     await flushAutoSave()
-    if (requestId !== openRequestRef.current) return
+    if (requestId !== openRequestRef.current) return null
     const content = await storage.readNote(note.filename)
-    if (requestId !== openRequestRef.current) return
+    if (requestId !== openRequestRef.current) return null
     const metadata = updateNoteMetadata(note.filename, { lastOpened: Date.now() })
-    setCurrentNote(content === null ? null : { ...note, ...metadata, content })
+    const openedNote = content === null ? null : { ...note, ...metadata, content }
+    setCurrentNote(openedNote)
     setNotes(prev => decorateNotes(prev.map(item => item.filename === note.filename ? { ...item, ...metadata } : item)))
-    setSaveStatus(content === null ? { state: 'idle' } : savedStatus())
+    setSaveStatus(openedNote === null ? { state: 'idle' } : savedStatus())
+    return openedNote
   }, [flushAutoSave])
 
   const createNote = useCallback(async (title?: string) => {
@@ -104,25 +118,30 @@ export function useNotes() {
     }
     if (requestId === openRequestRef.current) {
       const metadata = updateNoteMetadata(note.filename, { lastOpened: Date.now() })
-      setCurrentNote({ ...note, ...metadata })
+      const decorated = { ...note, ...metadata }
+      setCurrentNote(decorated)
+      setNotes(prev => decorateNotes([decorated, ...prev.filter(item => item.filename !== note.filename)]))
       setSaveStatus(savedStatus())
     }
-    await refreshList()
+    await refreshAfterMutation()
     return note
-  }, [flushAutoSave, refreshList])
+  }, [flushAutoSave, refreshAfterMutation])
 
   const deleteNote = useCallback(async (filename: string) => {
     const requestId = ++openRequestRef.current
     await flushAutoSave()
     const result = await storage.deleteNote(filename)
-    if (result.deleted) removeNoteMetadata(filename)
+    if (result.deleted) {
+      removeNoteMetadata(filename)
+      setNotes(prev => prev.filter(item => item.filename !== filename))
+    }
     if (requestId === openRequestRef.current && currentNoteRef.current?.filename === filename) {
       setCurrentNote(null)
       setSaveStatus({ state: 'idle' })
     }
-    await refreshList()
+    await refreshAfterMutation()
     return result
-  }, [flushAutoSave, refreshList])
+  }, [flushAutoSave, refreshAfterMutation])
 
   const saveCurrentNote = useCallback(async (content: string) => {
     const note = currentNoteRef.current
@@ -170,6 +189,9 @@ export function useNotes() {
     await flushAutoSave()
     const result = await storage.renameNote(oldFilename, newTitle)
     renameNoteMetadata(oldFilename, result.filename)
+    setNotes(prev => decorateNotes(prev.map(item => item.filename === oldFilename
+      ? { ...item, id: result.filename.slice(0, -3), filename: result.filename, title: result.title }
+      : item)))
     if (requestId === openRequestRef.current && currentNoteRef.current?.filename === oldFilename) {
       setCurrentNote(prev => prev ? {
         ...prev,
@@ -178,9 +200,9 @@ export function useNotes() {
         title: result.title,
       } : null)
     }
-    await refreshList()
+    await refreshAfterMutation()
     return result
-  }, [flushAutoSave, refreshList])
+  }, [flushAutoSave, refreshAfterMutation])
 
   const adoptImportedNote = useCallback(async (result: { filename: string; title: string; content: string } | null) => {
     if (!result) return null
@@ -197,11 +219,12 @@ export function useNotes() {
     }
     if (requestId === openRequestRef.current) {
       setCurrentNote(note)
+      setNotes(prev => decorateNotes([note, ...prev.filter(item => item.filename !== note.filename)]))
       setSaveStatus(savedStatus())
     }
-    await refreshList()
+    await refreshAfterMutation()
     return note
-  }, [flushAutoSave, refreshList])
+  }, [flushAutoSave, refreshAfterMutation])
 
   const importMarkdownFile = useCallback(async (filePath: string) => {
     return adoptImportedNote(await storage.importMarkdownFile(filePath))

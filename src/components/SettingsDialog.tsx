@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useSettings, ColorScheme } from '../contexts/SettingsContext'
 import { setModel, fetchModels, configureAI, clearAIKey, getDefaultModelsForProvider } from '../services/ai'
 import { useTranslation } from '../i18n'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 
 interface SettingsDialogProps {
   visible: boolean
@@ -46,6 +47,8 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [showModelDropdown, setShowModelDropdown] = useState(false)
   const modelContainerRef = useRef<HTMLDivElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useDialogFocus(visible, dialogRef)
 
   const isZh = locale === 'zh'
 
@@ -150,7 +153,15 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
 
   return (
     <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isZh ? '设置' : 'Settings'}
+        tabIndex={-1}
+        onClick={e => e.stopPropagation()}
+      >
         <div className="settings-sidebar">
           <div className="settings-sidebar-header">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -197,7 +208,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
                tab === 'ai' ? 'AI' :
                isZh ? '关于 EasyMark' : 'About EasyMark'}
             </h2>
-            <button className="settings-close-btn" onClick={onClose}>
+            <button className="settings-close-btn" onClick={onClose} aria-label={isZh ? '关闭' : 'Close'}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
               </svg>
@@ -420,7 +431,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
                     <path d="M8 7h8M8 11h6M8 15h4" />
                   </svg>
                 </div>
-                <h3>EasyMark v1.0.0</h3>
+                <h3>EasyMark v1.1.0</h3>
                 <p>{isZh ? 'AI 驱动的 Markdown 笔记应用' : 'AI-powered Markdown note application'}</p>
                 <button className="settings-help-btn" onClick={() => { void window.electronAPI.openHelp(locale).catch(error => console.error('Failed to open help:', error)) }}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

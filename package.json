@@ -1,6 +1,6 @@
 {
   "name": "easymark",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Cross-platform AI-powered Markdown note application",
   "license": "MIT",
   "homepage": "https://github.com/KateHuang0710/easymark#readme",
@@ -25,7 +25,9 @@
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "pack:mac": "npm run build && electron-builder --mac --dir",
-    "dist:win": "npm run build && electron-builder --win",
+    "dist:win": "npm run dist:win:x64",
+    "dist:win:x64": "npm run build && electron-builder --win nsis --x64",
+    "dist:win:arm64": "npm run build && electron-builder --win nsis --arm64",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
     "dist:mac:x64": "npm run build && electron-builder --mac --x64",
@@ -43,6 +45,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "build/icon.ico",
+      "build/icon-512x512.png",
       "package.json"
     ],
     "extraMetadata": {
@@ -103,7 +107,7 @@
   "dependencies": {
     "@types/turndown": "^5.0.4",
     "docx": "^9.7.1",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "highlight.js": "^11.11.1",
     "marked": "^12.0.2",
     "openai": "^4.104.0",

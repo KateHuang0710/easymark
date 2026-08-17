@@ -1,26 +1,35 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { lazy, Suspense, useState, useCallback, useEffect, useRef } from 'react'
 import { I18nProvider, useTranslation } from './i18n'
 import { SettingsProvider, useSettings } from './contexts/SettingsContext'
 import { TitleBar } from './components/TitleBar'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
 import { MarkdownEditor } from './components/Editor/MarkdownEditor'
-import { AIAssistant } from './components/AIAssistant'
-import { SettingsDialog } from './components/SettingsDialog'
-import { ReadingMode } from './components/Editor/ReadingMode'
-import { ExportDialog } from './components/Editor/ExportDialog'
-import { VersionHistoryDialog } from './components/Editor/VersionHistoryDialog'
-import { SearchPanel } from './components/Editor/SearchPanel'
+const AIAssistant = lazy(() => import('./components/AIAssistant').then(module => ({ default: module.AIAssistant })))
+const SettingsDialog = lazy(() => import('./components/SettingsDialog').then(module => ({ default: module.SettingsDialog })))
+const ReadingMode = lazy(() => import('./components/Editor/ReadingMode').then(module => ({ default: module.ReadingMode })))
+const ExportDialog = lazy(() => import('./components/Editor/ExportDialog').then(module => ({ default: module.ExportDialog })))
+const VersionHistoryDialog = lazy(() => import('./components/Editor/VersionHistoryDialog').then(module => ({ default: module.VersionHistoryDialog })))
+const SearchPanel = lazy(() => import('./components/Editor/SearchPanel').then(module => ({ default: module.SearchPanel })))
 import { useNotes } from './hooks/useNotes'
 import { Note, NoteSummary, SaveStatus } from './types'
 import * as storage from './services/storage'
 import { LatestSaveQueue } from './services/latestSaveQueue'
-import { CommandPalette, AppCommand } from './components/CommandPalette'
-import { BacklinksPanel } from './components/BacklinksPanel'
-import { GitPanel } from './components/GitPanel'
+const CommandPalette = lazy(() => import('./components/CommandPalette').then(module => ({ default: module.CommandPalette })))
+import type { AppCommand } from './components/CommandPalette'
+const BacklinksPanel = lazy(() => import('./components/BacklinksPanel').then(module => ({ default: module.BacklinksPanel })))
+const GitPanel = lazy(() => import('./components/GitPanel').then(module => ({ default: module.GitPanel })))
 
 function saveErrorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : 'Could not save note'
+}
+
+const DEFAULT_COMPARE_SPLIT = 50
+const MIN_COMPARE_SPLIT = 28
+const MAX_COMPARE_SPLIT = 72
+
+function clampCompareSplit(value: number): number {
+  return Math.min(MAX_COMPARE_SPLIT, Math.max(MIN_COMPARE_SPLIT, value))
 }
 
 function AppContent() {
@@ -61,11 +70,18 @@ function AppContent() {
   const [searchAllVisible, setSearchAllVisible] = useState(false)
   const [secondNote, setSecondNote] = useState<Note | null>(null)
   const [secondSaveStatus, setSecondSaveStatus] = useState<SaveStatus>({ state: 'idle' })
+  const [compareSplit, setCompareSplit] = useState(DEFAULT_COMPARE_SPLIT)
+  const [compareResizing, setCompareResizing] = useState(false)
   const [historyTarget, setHistoryTarget] = useState<{ pane: 'primary' | 'secondary'; filename: string; title: string } | null>(null)
   const [createRequestId, setCreateRequestId] = useState(0)
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false)
   const [gitPanelVisible, setGitPanelVisible] = useState(false)
   const [dropActive, setDropActive] = useState(false)
+  const [primaryFocusRequestId, setPrimaryFocusRequestId] = useState(0)
+  const [secondaryFocusRequestId, setSecondaryFocusRequestId] = useState(0)
+  const dragDepthRef = useRef(0)
+  const compareContainerRef = useRef<HTMLDivElement>(null)
+  const comparePointerRef = useRef<number | null>(null)
   const secondSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const secondSaveQueueRef = useRef<LatestSaveQueue | null>(null)
   const secondOpenRequestRef = useRef(0)
@@ -156,41 +172,115 @@ function AppContent() {
     await flushSecondSave()
   }, [secondNote, currentNote?.filename, flushAutoSave, flushSecondSave])
 
-  const handleSplitRight = useCallback(() => {
-    if (!settings.dualPane && currentNote) {
-      secondOpenRequestRef.current += 1
-      // Use in-memory content (currentNote.content) which is always up-to-date,
-      // not disk content which may be stale due to auto-save debounce (1s).
-      setSecondNote({ ...currentNote })
-      setSecondSaveStatus(saveStatus)
-      setDualPane(true)
-    }
-  }, [settings.dualPane, currentNote, saveStatus, setDualPane])
+  const handleSwapPanes = useCallback(async () => {
+    if (!currentNote || !secondNote || currentNote.filename === secondNote.filename) return
+    const requestId = ++secondOpenRequestRef.current
+    const previousPrimary = { ...currentNote }
+    const nextPrimary = allNotes.find(note => note.filename === secondNote.filename) ?? secondNote
+
+    await Promise.all([flushAutoSave(), flushSecondSave()])
+    if (requestId !== secondOpenRequestRef.current) return
+
+    const openedNote = await openNote(nextPrimary)
+    if (requestId !== secondOpenRequestRef.current || !openedNote) return
+
+    setSecondNote(previousPrimary)
+    setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+    setPrimaryFocusRequestId(id => id + 1)
+  }, [allNotes, currentNote, secondNote, flushAutoSave, flushSecondSave, openNote])
+
+  const handleSplitRight = useCallback(async () => {
+    if (settings.dualPane || !currentNote) return
+    const candidate = allNotes.find(note => note.filename !== currentNote.filename)
+    if (!candidate) return
+
+    const requestId = ++secondOpenRequestRef.current
+    await Promise.all([flushAutoSave(), flushSecondSave()])
+    if (requestId !== secondOpenRequestRef.current) return
+
+    const content = await storage.readNote(candidate.filename)
+    if (requestId !== secondOpenRequestRef.current || content === null) return
+
+    setSecondNote({ ...candidate, content })
+    setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+    setCompareSplit(DEFAULT_COMPARE_SPLIT)
+    setDualPane(true)
+    setSecondaryFocusRequestId(id => id + 1)
+  }, [settings.dualPane, currentNote, allNotes, flushAutoSave, flushSecondSave, setDualPane])
 
   const handleDeleteNote = useCallback(async (filename: string) => {
-    secondOpenRequestRef.current += 1
+    const requestId = ++secondOpenRequestRef.current
     await flushSecondSave()
+    if (requestId !== secondOpenRequestRef.current) return { deleted: false }
+
+    const deletedPrimary = settings.dualPane && currentNote?.filename === filename ? secondNote : null
     const result = await deleteNote(filename)
+    if (!result.deleted || requestId !== secondOpenRequestRef.current) return result
+
     if (secondNote?.filename === filename) {
+      setDualPane(false)
       setSecondNote(null)
       setSecondSaveStatus({ state: 'idle' })
+      setCompareSplit(DEFAULT_COMPARE_SPLIT)
+      setPrimaryFocusRequestId(id => id + 1)
+    } else if (deletedPrimary) {
+      const promoted = await openNote(deletedPrimary)
+      if (requestId !== secondOpenRequestRef.current) return result
+      setDualPane(false)
+      setSecondNote(null)
+      setSecondSaveStatus({ state: 'idle' })
+      setCompareSplit(DEFAULT_COMPARE_SPLIT)
+      if (promoted) setPrimaryFocusRequestId(id => id + 1)
     }
     return result
-  }, [deleteNote, flushSecondSave, secondNote])
+  }, [currentNote?.filename, deleteNote, flushSecondSave, openNote, secondNote, settings.dualPane, setDualPane])
 
   const handlePrimaryNoteSelect = useCallback(async (note: NoteSummary) => {
+    if (currentNote?.filename === note.filename) {
+      setPrimaryFocusRequestId(id => id + 1)
+      return
+    }
+    if (settings.dualPane && secondNote?.filename === note.filename) {
+      await handleSwapPanes()
+      return
+    }
+
+    const requestId = ++secondOpenRequestRef.current
     await flushSecondSave()
-    await openNote(note)
-  }, [flushSecondSave, openNote])
+    if (requestId !== secondOpenRequestRef.current) return
+    const openedNote = await openNote(note)
+    if (requestId === secondOpenRequestRef.current && openedNote) {
+      setPrimaryFocusRequestId(id => id + 1)
+    }
+  }, [currentNote?.filename, settings.dualPane, secondNote?.filename, handleSwapPanes, flushSecondSave, openNote])
 
   const handleCreateNote = useCallback(async (title?: string) => {
     secondOpenRequestRef.current += 1
     await flushSecondSave()
-    return createNote(title)
+    const note = await createNote(title)
+    setPrimaryFocusRequestId(requestId => requestId + 1)
+    return note
   }, [flushSecondSave, createNote])
 
   useEffect(() => {
     const handleGlobalShortcut = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        // Close the top-most app-level surface even while its lazy chunk is
+        // still loading. This keeps a fast click-then-Escape interaction
+        // reliable instead of leaving an invisible pending dialog behind.
+        if (commandPaletteVisible) setCommandPaletteVisible(false)
+        else if (settingsVisible) setSettingsVisible(false)
+        else if (aiVisible) setAIVisible(false)
+        else if (searchAllVisible) setSearchAllVisible(false)
+        else if (historyTarget) setHistoryTarget(null)
+        else if (exportVisible) setExportVisible(false)
+        else if (gitPanelVisible) setGitPanelVisible(false)
+        else if (readingModeActive) setReadingModeActive(false)
+        else return
+        event.preventDefault()
+        return
+      }
+
       if (!(event.ctrlKey || event.metaKey)) return
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault()
@@ -204,7 +294,7 @@ function AppContent() {
     }
     window.addEventListener('keydown', handleGlobalShortcut)
     return () => window.removeEventListener('keydown', handleGlobalShortcut)
-  }, [])
+  }, [aiVisible, commandPaletteVisible, exportVisible, gitPanelVisible, historyTarget, readingModeActive, searchAllVisible, settingsVisible])
 
   const handleOpenNoteByFilename = useCallback(async (filename: string) => {
     const note = allNotes.find(item => item.filename === filename)
@@ -224,7 +314,9 @@ function AppContent() {
         setCreateRequestId(current => current + 1)
         break
       case 'open-markdown':
-        void chooseAndImportMarkdownFile().catch(error => console.error('Failed to import Markdown:', error))
+        void chooseAndImportMarkdownFile()
+          .then(note => { if (note) setPrimaryFocusRequestId(requestId => requestId + 1) })
+          .catch(error => console.error('Failed to import Markdown:', error))
         break
       case 'search-all': setSearchAllVisible(true); break
       case 'toggle-ai': setAIInitialTab('complete'); setAIVisible(true); break
@@ -241,32 +333,60 @@ function AppContent() {
   useEffect(() => window.electronAPI.onMenuCommand(runAppCommand), [runAppCommand])
 
   useEffect(() => {
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file')
+    const resetDragState = () => {
+      dragDepthRef.current = 0
+      setDropActive(false)
+    }
+    const handleDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      dragDepthRef.current += 1
+      setDropActive(true)
+    }
     const handleDragOver = (event: DragEvent) => {
-      if (!Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file')) return
+      if (!hasFiles(event)) return
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
       setDropActive(true)
     }
     const handleDragLeave = (event: DragEvent) => {
-      if (!event.relatedTarget) setDropActive(false)
+      if (dragDepthRef.current === 0) return
+      if (!event.relatedTarget) {
+        resetDragState()
+        return
+      }
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+      if (dragDepthRef.current === 0) setDropActive(false)
     }
     const handleDrop = (event: DragEvent) => {
+      const fileDrag = dragDepthRef.current > 0 || hasFiles(event)
+      if (!fileDrag) return
       event.preventDefault()
-      setDropActive(false)
+      resetDragState()
       const file = Array.from(event.dataTransfer?.files || []).find(item => item.name.toLocaleLowerCase().endsWith('.md'))
       if (!file) return
       let filePath = ''
       try { filePath = window.electronAPI.getPathForFile(file) } catch (error) { console.error('Could not resolve dropped Markdown path:', error) }
       if (!filePath) return
-      void importMarkdownFile(filePath).catch(error => console.error('Failed to import dropped Markdown:', error))
+      void importMarkdownFile(filePath)
+        .then(note => { if (note) setPrimaryFocusRequestId(requestId => requestId + 1) })
+        .catch(error => console.error('Failed to import dropped Markdown:', error))
     }
+    window.addEventListener('dragenter', handleDragEnter)
     window.addEventListener('dragover', handleDragOver)
     window.addEventListener('dragleave', handleDragLeave)
     window.addEventListener('drop', handleDrop)
+    window.addEventListener('dragend', resetDragState)
+    window.addEventListener('blur', resetDragState)
     return () => {
+      window.removeEventListener('dragenter', handleDragEnter)
       window.removeEventListener('dragover', handleDragOver)
       window.removeEventListener('dragleave', handleDragLeave)
       window.removeEventListener('drop', handleDrop)
+      window.removeEventListener('dragend', resetDragState)
+      window.removeEventListener('blur', resetDragState)
+      dragDepthRef.current = 0
     }
   }, [importMarkdownFile])
 
@@ -286,27 +406,64 @@ function AppContent() {
       setDualPane(false)
       setSecondNote(null)
       setSecondSaveStatus({ state: 'idle' })
-    }).catch(error => console.error('Could not close second pane because saving failed:', error))
+      setCompareSplit(DEFAULT_COMPARE_SPLIT)
+      setPrimaryFocusRequestId(id => id + 1)
+    }).catch(error => console.error('Could not close note comparison because saving failed:', error))
   }, [flushSecondSave, setDualPane])
 
   const handleSecondNoteSelect = useCallback(async (filename: string) => {
+    if (!currentNote || filename === currentNote.filename || filename === secondNote?.filename) return
     const requestId = ++secondOpenRequestRef.current
     await flushSecondSave()
     if (requestId !== secondOpenRequestRef.current) return
     const summary = allNotes.find(note => note.filename === filename)
     if (!summary) return
-    if (currentNote?.filename === filename) {
-      setSecondNote({ ...currentNote })
-      setSecondSaveStatus(saveStatus)
-      return
-    }
     const content = await storage.readNote(filename)
-    if (requestId !== secondOpenRequestRef.current) return
-    if (content !== null) {
-      setSecondNote({ ...summary, content })
-      setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+    if (requestId !== secondOpenRequestRef.current || content === null) return
+    setSecondNote({ ...summary, content })
+    setSecondaryFocusRequestId(id => id + 1)
+    setSecondSaveStatus({ state: 'saved', savedAt: Date.now() })
+  }, [allNotes, currentNote, secondNote?.filename, flushSecondSave])
+
+  const updateCompareSplitFromPointer = useCallback((clientX: number) => {
+    const bounds = compareContainerRef.current?.getBoundingClientRect()
+    if (!bounds || bounds.width <= 0) return
+    setCompareSplit(clampCompareSplit(((clientX - bounds.left) / bounds.width) * 100))
+  }, [])
+
+  const handleCompareDividerPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    comparePointerRef.current = event.pointerId
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setCompareResizing(true)
+    updateCompareSplitFromPointer(event.clientX)
+    event.preventDefault()
+  }, [updateCompareSplitFromPointer])
+
+  const handleCompareDividerPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (comparePointerRef.current !== event.pointerId) return
+    updateCompareSplitFromPointer(event.clientX)
+  }, [updateCompareSplitFromPointer])
+
+  const finishCompareResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (comparePointerRef.current !== event.pointerId) return
+    comparePointerRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
-  }, [allNotes, currentNote, flushSecondSave, saveStatus])
+    setCompareResizing(false)
+  }, [])
+
+  const handleCompareDividerKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 5 : 2
+    if (event.key === 'ArrowLeft') setCompareSplit(value => clampCompareSplit(value - step))
+    else if (event.key === 'ArrowRight') setCompareSplit(value => clampCompareSplit(value + step))
+    else if (event.key === 'Home') setCompareSplit(MIN_COMPARE_SPLIT)
+    else if (event.key === 'End') setCompareSplit(MAX_COMPARE_SPLIT)
+    else if (event.key === 'Enter' || event.key === ' ') setCompareSplit(DEFAULT_COMPARE_SPLIT)
+    else return
+    event.preventDefault()
+  }, [])
 
   const handleOpenHistory = useCallback(async (pane: 'primary' | 'secondary') => {
     const note = pane === 'primary' ? currentNote : secondNote
@@ -346,6 +503,11 @@ function AppContent() {
     }
   }, [currentNote])
 
+  const comparisonNotes = currentNote
+    ? allNotes.filter(note => note.filename !== currentNote.filename)
+    : []
+  const canCompareNotes = comparisonNotes.length > 0
+
   return (
     <div className={`app platform-${window.electronAPI.platform} theme-${settings.theme} scheme-${settings.colorScheme}`}>
       <TitleBar
@@ -356,6 +518,7 @@ function AppContent() {
       <div className="app-body">
         <Sidebar
           notes={notes}
+          totalNoteCount={allNotes.length}
           currentNote={currentNote}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -374,24 +537,34 @@ function AppContent() {
         />
         <main className="app-main">
           {readingModeActive && currentNote ? (
-            <ReadingMode
-              content={currentNote.content}
-              title={currentNote.title}
-              onClose={() => setReadingModeActive(false)}
-              onEdit={() => setReadingModeActive(false)}
-            />
+            <Suspense fallback={<div className="app-loading" role="status">{locale === 'zh' ? '加载中…' : 'Loading…'}</div>}>
+              <ReadingMode
+                content={currentNote.content}
+                title={currentNote.title}
+                onClose={() => setReadingModeActive(false)}
+                onEdit={() => setReadingModeActive(false)}
+              />
+            </Suspense>
           ) : settings.dualPane && currentNote && secondNote ? (
-            <div className="dual-pane">
-              <div className="dual-pane-panel">
+            <div
+              ref={compareContainerRef}
+              className={`dual-pane${compareResizing ? ' is-resizing' : ''}`}
+              aria-label={t.editor.dualPane}
+              data-split={Math.round(compareSplit)}
+            >
+              <div
+                className="dual-pane-panel dual-pane-panel-primary"
+                style={{ flexBasis: `calc(${compareSplit}% - 5px)` }}
+              >
                 <div className="dual-pane-header">
-                  <span className="dual-pane-title">{currentNote.title}</span>
-                  <button className="dual-pane-close" onClick={handleClosePane} title={t.editor.closePane}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                  </button>
+                  <div className="dual-pane-heading">
+                    <span className="dual-pane-label">{t.editor.compareCurrent}</span>
+                    <span className="dual-pane-title" title={currentNote.title}>{currentNote.title}</span>
+                  </div>
                 </div>
                 <MarkdownEditor
+                  noteId={currentNote.filename}
+                  focusRequestId={primaryFocusRequestId}
                   content={currentNote.content}
                   onChange={handleContentChange}
                   onSave={handleSave}
@@ -401,26 +574,70 @@ function AppContent() {
                   onOpenHistory={() => { void handleOpenHistory('primary').catch(error => console.error('Failed to open note history:', error)) }}
                 />
               </div>
-              <div className="dual-pane-divider" />
-              <div className="dual-pane-panel">
-                <div className="dual-pane-header">
-                  <select
-                    className="dual-pane-select"
-                    value={secondNote.filename}
-                    onChange={e => { void handleSecondNoteSelect(e.target.value).catch(error => console.error('Failed to open second pane note:', error)) }}
-                  >
-                    {allNotes.map(n => (
-                      <option key={n.filename} value={n.filename}>{n.title}</option>
-                    ))}
-                  </select>
+              <div
+                className="dual-pane-divider"
+                role="separator"
+                aria-label={t.editor.resizeComparison}
+                aria-orientation="vertical"
+                aria-valuemin={MIN_COMPARE_SPLIT}
+                aria-valuemax={MAX_COMPARE_SPLIT}
+                aria-valuenow={Math.round(compareSplit)}
+                tabIndex={0}
+                title={t.editor.resizeComparisonHint}
+                onPointerDown={handleCompareDividerPointerDown}
+                onPointerMove={handleCompareDividerPointerMove}
+                onPointerUp={finishCompareResize}
+                onPointerCancel={finishCompareResize}
+                onLostPointerCapture={() => { comparePointerRef.current = null; setCompareResizing(false) }}
+                onDoubleClick={() => setCompareSplit(DEFAULT_COMPARE_SPLIT)}
+                onKeyDown={handleCompareDividerKeyDown}
+              >
+                <span className="dual-pane-divider-grip" aria-hidden="true" />
+              </div>
+              <div className="dual-pane-panel dual-pane-panel-secondary">
+                <div className="dual-pane-header dual-pane-header-secondary">
+                  <div className="dual-pane-heading dual-pane-heading-select">
+                    <label className="dual-pane-label" htmlFor="comparison-note-select">{t.editor.compareWith}</label>
+                    <select
+                      id="comparison-note-select"
+                      className="dual-pane-select"
+                      aria-label={t.editor.compareWith}
+                      value={secondNote.filename}
+                      onChange={e => { void handleSecondNoteSelect(e.target.value).catch(error => console.error('Failed to open comparison note:', error)) }}
+                    >
+                      {comparisonNotes.map(note => (
+                        <option key={note.filename} value={note.filename}>{note.title}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="dual-pane-actions">
+                    <button
+                      type="button"
+                      className="dual-pane-action"
+                      onClick={() => { void handleSwapPanes().catch(error => console.error('Failed to swap comparison notes:', error)) }}
+                      title={t.editor.swapPanes}
+                      aria-label={t.editor.swapPanes}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M7 7h11l-3-3"/><path d="m18 7-3 3"/><path d="M17 17H6l3 3"/><path d="m6 17 3-3"/>
+                      </svg>
+                    </button>
+                    <button type="button" className="dual-pane-action" onClick={handleClosePane} title={t.editor.closePane} aria-label={t.editor.closePane}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <MarkdownEditor
+                  noteId={secondNote.filename}
+                  focusRequestId={secondaryFocusRequestId}
                   content={secondNote.content}
                   onChange={handleSecondContentChange}
                   onSave={handleSecondSave}
                   dualPaneMode={true}
-                  saveStatus={secondNote.filename === currentNote.filename ? saveStatus : secondSaveStatus}
-                  onRetrySave={secondNote.filename === currentNote.filename ? retrySave : flushSecondSave}
+                  saveStatus={secondSaveStatus}
+                  onRetrySave={flushSecondSave}
                   onOpenHistory={() => { void handleOpenHistory('secondary').catch(error => console.error('Failed to open note history:', error)) }}
                 />
               </div>
@@ -428,10 +645,13 @@ function AppContent() {
           ) : currentNote ? (
             <div className="single-note-workspace">
               <MarkdownEditor
+                noteId={currentNote.filename}
+                focusRequestId={primaryFocusRequestId}
                 content={currentNote.content}
                 onChange={handleContentChange}
                 onSave={handleSave}
-                onSplitRight={handleSplitRight}
+                onSplitRight={() => { void handleSplitRight().catch(error => console.error('Failed to open note comparison:', error)) }}
+                canSplitRight={canCompareNotes}
                 onExport={() => { setSettingsVisible(false); setExportVisible(true) }}
                 onSearchAll={() => setSearchAllVisible(true)}
                 onReadingMode={settings.readingMode ? handleReadingMode : undefined}
@@ -444,7 +664,9 @@ function AppContent() {
                 }}
                 onShare={() => { void handleShareNote().catch(error => console.error('Failed to share note:', error)) }}
               />
-              <BacklinksPanel title={currentNote.title} content={currentNote.content} notes={allNotes} onOpenNote={filename => { void handleOpenNoteByFilename(filename) }} />
+              <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+                <BacklinksPanel title={currentNote.title} content={currentNote.content} notes={allNotes} onOpenNote={filename => { void handleOpenNoteByFilename(filename) }} />
+              </Suspense>
             </div>
           ) : (
             <div className="app-welcome">
@@ -465,46 +687,69 @@ function AppContent() {
               </button>
             </div>
           )}
-          <SearchPanel
-            visible={searchAllVisible}
-            onClose={() => setSearchAllVisible(false)}
-            onOpenNote={filename => { void handleOpenNoteFromSearch(filename).catch(error => console.error('Failed to open search result:', error)) }}
-          />
+          {searchAllVisible && (
+            <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+              <SearchPanel
+                visible
+                onClose={() => setSearchAllVisible(false)}
+                onOpenNote={filename => { void handleOpenNoteFromSearch(filename).catch(error => console.error('Failed to open search result:', error)) }}
+              />
+            </Suspense>
+          )}
         </main>
-        <AIAssistant
-          visible={aiVisible}
-          onClose={() => { setAIInitialTab('complete'); setAIVisible(false) }}
-          noteContent={currentNote?.content || ''}
-          onOpenNote={filename => { void handleOpenNoteByFilename(filename) }}
-          initialTab={aiInitialTab}
-        />
-        <SettingsDialog
-          visible={settingsVisible}
-          onClose={() => setSettingsVisible(false)}
-        />
-        {currentNote && (
-          <ExportDialog
-            visible={exportVisible}
-            onClose={() => setExportVisible(false)}
-            content={currentNote.content}
-            title={currentNote.title}
-          />
+        {aiVisible && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <AIAssistant
+              visible
+              onClose={() => { setAIInitialTab('complete'); setAIVisible(false) }}
+              noteContent={currentNote?.content || ''}
+              onOpenNote={filename => { void handleOpenNoteByFilename(filename) }}
+              initialTab={aiInitialTab}
+            />
+          </Suspense>
         )}
-        <VersionHistoryDialog
-          visible={Boolean(historyTarget)}
-          filename={historyTarget?.filename || null}
-          title={historyTarget?.title || ''}
-          onClose={() => setHistoryTarget(null)}
-          onRestored={handleVersionRestored}
-        />
-        <CommandPalette
-          visible={commandPaletteVisible}
-          notes={allNotes}
-          onClose={() => setCommandPaletteVisible(false)}
-          onOpenNote={note => { void handlePrimaryNoteSelect(note) }}
-          onCommand={runAppCommand}
-        />
-        <GitPanel visible={gitPanelVisible} onClose={() => setGitPanelVisible(false)} />
+        {settingsVisible && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <SettingsDialog visible onClose={() => setSettingsVisible(false)} />
+          </Suspense>
+        )}
+        {currentNote && exportVisible && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <ExportDialog
+              visible
+              onClose={() => setExportVisible(false)}
+              content={currentNote.content}
+              title={currentNote.title}
+            />
+          </Suspense>
+        )}
+        {historyTarget && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <VersionHistoryDialog
+              visible
+              filename={historyTarget.filename}
+              title={historyTarget.title}
+              onClose={() => setHistoryTarget(null)}
+              onRestored={handleVersionRestored}
+            />
+          </Suspense>
+        )}
+        {commandPaletteVisible && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <CommandPalette
+              visible
+              notes={allNotes}
+              onClose={() => setCommandPaletteVisible(false)}
+              onOpenNote={note => { void handlePrimaryNoteSelect(note) }}
+              onCommand={runAppCommand}
+            />
+          </Suspense>
+        )}
+        {gitPanelVisible && (
+          <Suspense fallback={<div className="surface-loading" role="status" aria-live="polite">{t.app.loadingSurface}</div>}>
+            <GitPanel visible onClose={() => setGitPanelVisible(false)} />
+          </Suspense>
+        )}
         {dropActive && <div className="markdown-drop-overlay"><strong>{t.editor.placeholder}</strong><span>{locale === 'zh' ? '拖放 .md 文件以导入并查看' : 'Drop a .md file to import and view'}</span></div>}
       </div>
     </div>
