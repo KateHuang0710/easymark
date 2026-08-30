@@ -3,6 +3,7 @@ import { useTranslation } from '../../i18n'
 import * as storage from '../../services/storage'
 import { NoteVersion } from '../../types'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
+import { pushEscapeHandler } from '../../utils/escapeStack'
 
 interface VersionHistoryDialogProps {
   visible: boolean
@@ -85,12 +86,8 @@ export function VersionHistoryDialog({ visible, filename, title, onClose, onRest
   }, [visible, filename, selectedId, t.editor.historyLoadFailed])
 
   useEffect(() => {
-    if (!visible) return
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !restoring) onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    if (!visible || restoring) return
+    return pushEscapeHandler(onClose)
   }, [visible, restoring, onClose])
 
   const handleRestore = async () => {

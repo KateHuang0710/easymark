@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { BacklinkResult, NoteSummary } from '../types'
 import * as storage from '../services/storage'
 import { useTranslation } from '../i18n'
@@ -16,6 +16,7 @@ export function BacklinksPanel({ title, content, notes, onOpenNote }: BacklinksP
   const [open, setOpen] = useState(false)
   const [incoming, setIncoming] = useState<BacklinkResult[]>([])
   const [error, setError] = useState('')
+  const titleFetchPendingRef = useRef(false)
   const outgoing = useMemo(() => {
     const titles = Array.from(content.matchAll(/\[\[([^\]\n]{1,255})\]\]/g), match => match[1].trim())
     return Array.from(new Set(titles)).map(linkTitle => ({
@@ -27,13 +28,36 @@ export function BacklinksPanel({ title, content, notes, onOpenNote }: BacklinksP
   useEffect(() => {
     let cancelled = false
     setError('')
-    storage.listBacklinks(title).then(results => {
-      if (!cancelled) setIncoming(results)
-    }).catch(reason => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
-    })
-    return () => { cancelled = true }
-  }, [title, content])
+    // Rescanning the library reads every note from disk, so never run it per
+    // keystroke: title changes fetch on a short delay (keeps the collapsed
+    // badge correct), and content edits only refresh while the panel is open.
+    titleFetchPendingRef.current = true
+    const timer = window.setTimeout(() => {
+      storage.listBacklinks(title).then(results => {
+        titleFetchPendingRef.current = false
+        if (!cancelled) setIncoming(results)
+      }).catch(reason => {
+        titleFetchPendingRef.current = false
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+    }, 250)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [title])
+
+  useEffect(() => {
+    // A title-driven fetch already covers this note; an open refresh would
+    // only duplicate it.
+    if (!open || titleFetchPendingRef.current) return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      storage.listBacklinks(title).then(results => {
+        if (!cancelled) setIncoming(results)
+      }).catch(reason => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      })
+    }, 300)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [open, title, content])
 
   return (
     <div className={`backlinks-panel ${open ? 'open' : ''}`}>

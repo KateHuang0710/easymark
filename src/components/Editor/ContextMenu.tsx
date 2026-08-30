@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from '../../i18n'
 import { formatShortcut } from '../../utils/shortcuts'
+import { pushEscapeHandler } from '../../utils/escapeStack'
 
 interface MenuItem {
   id: string
@@ -43,15 +44,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         onClose()
       }
     }
-    const keyHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', handler)
-    document.addEventListener('keydown', keyHandler)
-    return () => {
-      document.removeEventListener('mousedown', handler)
-      document.removeEventListener('keydown', keyHandler)
-    }
+    return pushEscapeHandler(() => onClose())
   }, [onClose])
 
   return (

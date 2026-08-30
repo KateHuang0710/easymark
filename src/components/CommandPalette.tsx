@@ -83,7 +83,7 @@ export function CommandPalette({ visible, notes, onClose, onOpenNote, onCommand 
           onChange={event => { setQuery(event.target.value); setActiveIndex(0) }}
           placeholder={isZh ? '搜索笔记或输入命令…' : 'Search notes or type a command…'}
           onKeyDown={event => {
-            if (event.key === 'Escape') onClose()
+            if (event.key === 'Escape') { event.stopPropagation(); onClose() }
             if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(index => Math.min(index + 1, items.length - 1)) }
             if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(index => Math.max(index - 1, 0)) }
             if (event.key === 'Enter') { event.preventDefault(); activate(activeIndex) }

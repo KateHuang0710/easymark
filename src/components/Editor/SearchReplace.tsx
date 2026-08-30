@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from '../../i18n'
+import { pushEscapeHandler } from '../../utils/escapeStack'
 
 interface SearchReplaceProps {
   editorRef: React.RefObject<HTMLDivElement | null>
@@ -217,8 +218,14 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
 
   useEffect(() => {
     if (!visible) return
+    return pushEscapeHandler(onClose)
+  }, [visible, onClose])
+
+  useEffect(() => {
+    if (!visible) return
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onClose(); return }
+      // Escape is owned by the escape stack; Enter navigation only applies
+      // while the caret is inside the search bar inputs.
       if (e.key === 'Enter') {
         const target = e.target
         if (!(target instanceof HTMLInputElement) || !target.closest('.search-bar')) return
@@ -228,7 +235,7 @@ export function SearchReplace({ editorRef, getMarkdown, onChange, visible, onClo
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [visible, onClose, findNext])
+  }, [visible, findNext])
 
   if (!visible) return null
 

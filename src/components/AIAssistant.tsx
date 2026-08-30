@@ -5,6 +5,7 @@ import { useTranslation } from '../i18n'
 import { renderMarkdown } from '../services/markdown'
 import { NoteDocument } from '../types'
 import * as storage from '../services/storage'
+import { pushEscapeHandler } from '../utils/escapeStack'
 
 interface AIAssistantProps {
   visible: boolean
@@ -44,11 +45,7 @@ export function AIAssistant({ visible, onClose, noteContent, onOpenNote, initial
 
   useEffect(() => {
     if (!visible) return
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    return pushEscapeHandler(onClose)
   }, [onClose, visible])
 
   useEffect(() => {

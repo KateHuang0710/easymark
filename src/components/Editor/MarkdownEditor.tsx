@@ -9,6 +9,7 @@ import { InlineSuggestion } from './InlineSuggestion'
 import { AITransformAction, getInlineCompletion, isConfigured, transformSelection as transformAISelection } from '../../services/ai'
 import { useSettings } from '../../contexts/SettingsContext'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
+import { pushEscapeHandler } from '../../utils/escapeStack'
 import { SaveStatus } from '../../types'
 import { formatShortcut, formatShortcutLabel, isInlineCodeShortcut } from '../../utils/shortcuts'
 
@@ -1535,6 +1536,13 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
     linkSelectionRef.current = null
     editorRef.current?.focus()
   }, [])
+
+  // The input handles Escape itself while focused; this covers Escape with
+  // the focus elsewhere in the dialog.
+  useEffect(() => {
+    if (!linkDialogOpen) return
+    return pushEscapeHandler(() => closeLinkDialog())
+  }, [linkDialogOpen, closeLinkDialog])
 
   const confirmLinkDialog = useCallback(() => {
     if (linkSelectionRef.current) {

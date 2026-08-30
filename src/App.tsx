@@ -15,6 +15,7 @@ import { useNotes } from './hooks/useNotes'
 import { Note, NoteSummary, SaveStatus } from './types'
 import * as storage from './services/storage'
 import { LatestSaveQueue } from './services/latestSaveQueue'
+import { runTopEscapeHandler } from './utils/escapeStack'
 const CommandPalette = lazy(() => import('./components/CommandPalette').then(module => ({ default: module.CommandPalette })))
 import type { AppCommand } from './components/CommandPalette'
 const BacklinksPanel = lazy(() => import('./components/BacklinksPanel').then(module => ({ default: module.BacklinksPanel })))
@@ -263,10 +264,24 @@ function AppContent() {
   }, [flushSecondSave, createNote])
 
   useEffect(() => {
+    // Mounted dialogs register on the escape stack and run first; this
+    // document-level dispatcher must therefore observe the event before the
+    // window-level fallback shortcut handler below.
+    const handleEscapeStack = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      runTopEscapeHandler(event)
+    }
+    document.addEventListener('keydown', handleEscapeStack)
+    return () => document.removeEventListener('keydown', handleEscapeStack)
+  }, [])
+
+  useEffect(() => {
     const handleGlobalShortcut = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        // Close the top-most app-level surface even while its lazy chunk is
-        // still loading. This keeps a fast click-then-Escape interaction
+        // Fallback for surfaces whose dialog chunk is still loading and have
+        // not registered on the escape stack yet. Mounted dialogs handle
+        // Escape first and stop propagation, so this only sees truly
+        // unclaimed events. This keeps a fast click-then-Escape interaction
         // reliable instead of leaving an invisible pending dialog behind.
         if (commandPaletteVisible) setCommandPaletteVisible(false)
         else if (settingsVisible) setSettingsVisible(false)

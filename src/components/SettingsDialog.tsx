@@ -3,6 +3,7 @@ import { useSettings, ColorScheme } from '../contexts/SettingsContext'
 import { setModel, fetchModels, configureAI, clearAIKey, getDefaultModelsForProvider } from '../services/ai'
 import { useTranslation } from '../i18n'
 import { useDialogFocus } from '../hooks/useDialogFocus'
+import { pushEscapeHandler } from '../utils/escapeStack'
 
 interface SettingsDialogProps {
   visible: boolean
@@ -63,11 +64,7 @@ export function SettingsDialog({ visible, onClose }: SettingsDialogProps) {
 
   useEffect(() => {
     if (!visible) return
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    return pushEscapeHandler(onClose)
   }, [onClose, visible])
 
   // Close model dropdown on click outside
