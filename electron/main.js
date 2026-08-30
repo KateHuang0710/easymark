@@ -33,6 +33,11 @@ const {
 } = require('./credential-storage')
 const { commitGit, getGitDiff, getGitHistory, getGitStatus, initializeGit } = require('./git-repository')
 
+// E2E tests redirect these before any path below is resolved so automated
+// runs stay hermetic and never touch the real documents folder or profile.
+if (process.env.EASYMARK_DOCUMENTS_DIR) app.setPath('documents', path.resolve(process.env.EASYMARK_DOCUMENTS_DIR))
+if (process.env.EASYMARK_USER_DATA_DIR) app.setPath('userData', path.resolve(process.env.EASYMARK_USER_DATA_DIR))
+
 function shouldUseMockKeychain() {
   if (process.platform !== 'darwin') return false
   const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', process.execPath], {

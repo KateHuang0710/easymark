@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test tests/*.test.cjs",
     "test:e2e": "playwright test",
+    "test:e2e:electron": "npm run build && playwright test -c playwright.electron.config.ts",
     "check": "npm run typecheck && npm run test && npm run build",
     "start": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",

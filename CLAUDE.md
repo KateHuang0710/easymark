@@ -85,13 +85,13 @@ The custom endpoint must implement an OpenAI-compatible API, including Chat Comp
 
 - `src/services/markdown.test.ts`: XSS, URL and local asset normalization
 - `tests/file-utils.test.cjs`: path traversal, title and image validation
-- `tests/note-history.test.cjs`: version creation, deduplication, pruning, migration and path validation
+- `tests/note-history.test.cjs`: version creation, deduplication, coalescing, pruning, migration and path validation
+- `tests/electron/`: real-app Playwright E2E (close-save handshake, note switching, link dialog, Escape stacking) via `npm run test:e2e:electron`
 - Before release: `npm run check && npm audit`
 - For macOS release procedures, see `MACOS.md`.
 
 ## Known follow-up work
 
 - Replace remaining `document.execCommand` usage with Selection/Range operations.
-- Split highlight.js language registration to reduce the renderer bundle.
-- Add Playwright/Electron end-to-end tests for close-save, dual pane and editor mode switching.
-- Add a write-ahead session journal for recovery from process or machine crashes.
+- Add a write-ahead session journal for recovery from process or machine crashes, and sweep orphaned `.*.tmp` files at startup.
+- Consider E2E coverage for PDF/DOCX export and dual-pane-specific flows.
