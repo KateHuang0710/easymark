@@ -46,6 +46,50 @@ test('does not duplicate the latest identical version', async () => {
   })
 })
 
+async function backdateLatestVersion(historyRoot, filename, ageMs) {
+  const versions = await listVersions(historyRoot, filename, MAX_BYTES)
+  const latest = versions[0]
+  const directory = path.join(historyRoot, historyKey(filename))
+  const staleId = `${Math.max(0, latest.createdAt - ageMs)}-${latest.id.slice(14)}`
+  await fs.promises.rename(path.join(directory, latest.id), path.join(directory, staleId))
+}
+
+test('coalesces rapid saves onto the newest version inside the interval', async () => {
+  await withHistory(async historyRoot => {
+    await createVersion(historyRoot, 'notes.md', 'burst start', MAX_BYTES)
+    const coalesced = await createVersion(historyRoot, 'notes.md', 'two seconds later', MAX_BYTES, 10, { coalesceMs: 5 * 60 * 1000 })
+
+    const versions = await listVersions(historyRoot, 'notes.md', MAX_BYTES)
+    assert.equal(versions.length, 1)
+    assert.equal(versions[0].id, coalesced.id)
+    assert.equal(await readVersion(historyRoot, 'notes.md', coalesced.id, MAX_BYTES), 'two seconds later')
+  })
+})
+
+test('creates a separate version once the coalesce interval has passed', async () => {
+  await withHistory(async historyRoot => {
+    await createVersion(historyRoot, 'notes.md', 'yesterday', MAX_BYTES)
+    await backdateLatestVersion(historyRoot, 'notes.md', 10 * 60 * 1000)
+    await createVersion(historyRoot, 'notes.md', 'today', MAX_BYTES, 10, { coalesceMs: 5 * 60 * 1000 })
+
+    const versions = await listVersions(historyRoot, 'notes.md', MAX_BYTES)
+    assert.equal(versions.length, 2)
+    assert.equal(await readVersion(historyRoot, 'notes.md', versions[0].id, MAX_BYTES), 'today')
+    assert.equal(await readVersion(historyRoot, 'notes.md', versions[1].id, MAX_BYTES), 'yesterday')
+  })
+})
+
+test('explicit restores always create a version even inside the interval', async () => {
+  await withHistory(async historyRoot => {
+    await createVersion(historyRoot, 'notes.md', 'before restore', MAX_BYTES)
+    await createVersion(historyRoot, 'notes.md', 'restoring over it', MAX_BYTES)
+
+    const versions = await listVersions(historyRoot, 'notes.md', MAX_BYTES)
+    assert.equal(versions.length, 2)
+    assert.equal(await readVersion(historyRoot, 'notes.md', versions[1].id, MAX_BYTES), 'before restore')
+  })
+})
+
 test('deletes all history for a removed note without affecting other notes', async () => {
   await withHistory(async historyRoot => {
     await createVersion(historyRoot, 'removed.md', 'secret', MAX_BYTES)

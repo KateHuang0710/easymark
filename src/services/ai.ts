@@ -3,6 +3,38 @@ import { AIConnectionConfig, AIMessage, NoteDocument } from '../types'
 export const DEFAULT_MODELS = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']
 const NON_COMPLETION_PATTERNS = /embedding|moderation|tts|whisper|dall-e|davinci|babbage|curie|ada|instruct|realtime|audio/i
 
+// The main process rejects any AI request whose total UTF-8 size exceeds
+// MAX_AI_MESSAGE_BYTES (100 KB) in electron/main.js. All renderer-side content
+// budgets below are counted in UTF-8 bytes so CJK text cannot blow past the
+// limit: 60k Chinese characters would be ~180 KB despite being only 60k chars.
+const MAX_KNOWLEDGE_CONTEXT_BYTES = 80_000
+const MAX_COMPLETION_CONTEXT_BYTES = 24_000
+const MAX_SELECTION_BYTES = 48_000
+const MAX_SUMMARY_BYTES = 48_000
+const MAX_NOTE_CONTEXT_BYTES = 16_000
+const MAX_USER_MESSAGE_BYTES = 12_000
+const MAX_CHAT_HISTORY_BYTES = 48_000
+const MAX_CHAT_HISTORY_MESSAGE_BYTES = 6_000
+const MAX_CHAT_HISTORY_MESSAGES = 10
+const MAX_INLINE_CONTEXT_BYTES = 8_000
+const MAX_KNOWLEDGE_QUESTION_BYTES = 8_000
+
+const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder('utf-8')
+
+export function utf8ByteLength(text: string): number {
+  return textEncoder.encode(text).length
+}
+
+export function truncateToUtf8Bytes(text: string, maxBytes: number): string {
+  const bytes = textEncoder.encode(text)
+  if (bytes.length <= maxBytes) return text
+  // Walk back to a UTF-8 lead byte so the cut never splits a sequence.
+  let cut = Math.max(0, maxBytes)
+  while (cut > 0 && (bytes[cut] & 0xc0) === 0x80) cut -= 1
+  return textDecoder.decode(bytes.subarray(0, cut))
+}
+
 const PROVIDER_SUGGESTIONS: Record<string, string[]> = {
   'openai.com': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1', 'o3-mini'],
   'deepseek.com': ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'],
@@ -155,8 +187,8 @@ export async function getCompletion(text: string, context?: string): Promise<str
   messages.push({
     role: 'user',
     content: context
-      ? `Here is the current note content:\n\n${context}\n\n---\n\n${COMPLETION_PROMPT}${text}`
-      : `${COMPLETION_PROMPT}${text}`,
+      ? `Here is the current note content:\n\n${truncateToUtf8Bytes(context, MAX_COMPLETION_CONTEXT_BYTES)}\n\n---\n\n${COMPLETION_PROMPT}${truncateToUtf8Bytes(text, MAX_USER_MESSAGE_BYTES)}`
+      : `${COMPLETION_PROMPT}${truncateToUtf8Bytes(text, MAX_USER_MESSAGE_BYTES)}`,
   })
   return callAI(messages, 150, 0.7)
 }
@@ -166,7 +198,7 @@ export async function getInlineCompletion(textBeforeCursor: string): Promise<str
   try {
     const response = await callAI([
       { role: 'system', content: INLINE_COMPLETION_PROMPT },
-      { role: 'user', content: `Text before cursor:\n<content>\n${textBeforeCursor}\n</content>` },
+      { role: 'user', content: `Text before cursor:\n<content>\n${truncateToUtf8Bytes(textBeforeCursor, MAX_INLINE_CONTEXT_BYTES)}\n</content>` },
     ], 30, 0.4)
     return sanitizeInlineCompletion(response, textBeforeCursor)
   } catch {
@@ -177,7 +209,7 @@ export async function getInlineCompletion(textBeforeCursor: string): Promise<str
 export async function getSuggestion(text: string): Promise<string> {
   return callAI([
     { role: 'system', content: `${SYSTEM_PROMPT}\n\n${SUGGESTION_PROMPT}` },
-    { role: 'user', content: `Selected Markdown:\n<content>\n${text}\n</content>` },
+    { role: 'user', content: `Selected Markdown:\n<content>\n${truncateToUtf8Bytes(text, MAX_SELECTION_BYTES)}\n</content>` },
   ], 350, 0.35)
 }
 
@@ -198,19 +230,23 @@ export async function transformSelection(text: string, action: AITransformAction
   if (!text.trim()) return ''
   return callAI([
     { role: 'system', content: `${SYSTEM_PROMPT}\n\nYour response replaces selected editor text. Return only the replacement Markdown: no heading, label, commentary, quotation wrapper, or closing sentence.` },
-    { role: 'user', content: `${TRANSFORM_INSTRUCTIONS[action]}\n\n<selected-markdown>\n${text}\n</selected-markdown>` },
+    { role: 'user', content: `${TRANSFORM_INSTRUCTIONS[action]}\n\n<selected-markdown>\n${truncateToUtf8Bytes(text, MAX_SELECTION_BYTES)}\n</selected-markdown>` },
   ], action === 'expand' ? 700 : 450, 0.25)
 }
 
-function knowledgeContext(documents: NoteDocument[], maxChars = 60_000): string {
+function knowledgeContext(documents: NoteDocument[], maxBytes = MAX_KNOWLEDGE_CONTEXT_BYTES): string {
+  // Reserve a small overhead per section for the <note> wrapper and joiners so
+  // the assembled context never exceeds maxBytes even when titles are long.
+  const SECTION_OVERHEAD_BYTES = 256
+  const PER_NOTE_MAX_BYTES = 20_000
   let used = 0
   const sections: string[] = []
   for (const document of documents) {
-    const remaining = maxChars - used
-    if (remaining <= 0) break
-    const content = document.content.slice(0, Math.min(remaining, 6_000))
+    const remaining = maxBytes - used
+    if (remaining <= SECTION_OVERHEAD_BYTES) break
+    const content = truncateToUtf8Bytes(document.content, Math.min(PER_NOTE_MAX_BYTES, remaining - SECTION_OVERHEAD_BYTES))
     sections.push(`<note title="${document.title.replace(/["<>]/g, '')}">\n${content}\n</note>`)
-    used += content.length
+    used += utf8ByteLength(content) + SECTION_OVERHEAD_BYTES
   }
   return sections.join('\n\n')
 }
@@ -218,7 +254,7 @@ function knowledgeContext(documents: NoteDocument[], maxChars = 60_000): string 
 export async function askKnowledgeBase(question: string, documents: NoteDocument[]): Promise<string> {
   return callAI([
     { role: 'system', content: `${SYSTEM_PROMPT}\nAnswer only from the supplied notes. Cite supporting notes using [[Note Title]] after each relevant claim. If the notes do not contain the answer, say so directly. Do not invent sources.` },
-    { role: 'user', content: `Question: ${question}\n\nNotes:\n${knowledgeContext(documents)}` },
+    { role: 'user', content: `Question: ${truncateToUtf8Bytes(question, MAX_KNOWLEDGE_QUESTION_BYTES)}\n\nNotes:\n${knowledgeContext(documents)}` },
   ], 800, 0.2)
 }
 
@@ -251,15 +287,29 @@ export async function chatWithAI(
   history?: { role: 'user' | 'assistant'; content: string }[],
 ): Promise<string> {
   const messages: AIMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }]
-  if (noteContent) messages.push({ role: 'user', content: `Current note:\n\n${noteContent}` })
-  if (history?.length) messages.push(...history.slice(-10))
-  messages.push({ role: 'user', content: message })
+  if (noteContent) messages.push({ role: 'user', content: `Current note:\n\n${truncateToUtf8Bytes(noteContent, MAX_NOTE_CONTEXT_BYTES)}` })
+  if (history?.length) {
+    const clipped = history
+      .slice(-MAX_CHAT_HISTORY_MESSAGES)
+      .map(entry => ({ role: entry.role, content: truncateToUtf8Bytes(entry.content, MAX_CHAT_HISTORY_MESSAGE_BYTES) }))
+    // Keep the newest turns that fit the total history budget.
+    const kept: typeof clipped = []
+    let historyBytes = 0
+    for (let index = clipped.length - 1; index >= 0; index -= 1) {
+      const entryBytes = utf8ByteLength(clipped[index].content)
+      if (historyBytes + entryBytes > MAX_CHAT_HISTORY_BYTES) break
+      historyBytes += entryBytes
+      kept.unshift(clipped[index])
+    }
+    messages.push(...kept)
+  }
+  messages.push({ role: 'user', content: truncateToUtf8Bytes(message, MAX_USER_MESSAGE_BYTES) })
   return callAI(messages, 500, 0.7)
 }
 
 export async function getSummary(text: string): Promise<string> {
   return callAI([
     { role: 'system', content: 'Summarize the following text in 1-2 sentences. Be concise and factual. Respond in the same language as the text.' },
-    { role: 'user', content: text },
+    { role: 'user', content: truncateToUtf8Bytes(text, MAX_SUMMARY_BYTES) },
   ], 200, 0.3)
 }

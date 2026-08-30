@@ -14,6 +14,7 @@ const {
 const {
   createVersion,
   deleteHistory,
+  DEFAULT_VERSION_COALESCE_MS,
   listVersions,
   migrateHistory,
   readVersion,
@@ -696,7 +697,9 @@ ipcMain.handle('notes:save', async (event, filename, content) => {
   await withNoteMutationLock(async () => {
     const previousContent = await readRegularNote(filePath)
     if (previousContent === content) return
-    await createVersion(historyDir, filename, previousContent, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS)
+    await createVersion(historyDir, filename, previousContent, MAX_NOTE_BYTES, MAX_NOTE_VERSIONS, {
+      coalesceMs: DEFAULT_VERSION_COALESCE_MS,
+    })
     await writeNoteAtomically(filePath, content)
   })
   return true
@@ -1099,10 +1102,18 @@ ipcMain.handle('export:pdf', async (event, html, title) => {
 
   return new Promise((resolve, reject) => {
     let settled = false
+    let tempPath = null
+    const cleanupTempFile = () => {
+      if (!tempPath) return
+      const target = tempPath
+      tempPath = null
+      fs.promises.unlink(target).catch(() => {})
+    }
     const finish = (result, error = null) => {
       if (settled) return
       settled = true
       clearTimeout(timeoutId)
+      cleanupTempFile()
       if (!pdfWindow.isDestroyed()) pdfWindow.destroy()
       if (error) reject(error)
       else resolve(result)
@@ -1127,10 +1138,19 @@ ipcMain.handle('export:pdf', async (event, html, title) => {
         finish(null, err)
       }
     })
-    pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(err => {
-      console.error('Failed to load PDF content:', err)
-      finish(null, err)
-    })
+    void (async () => {
+      try {
+        // Chromium refuses navigations to URLs longer than ~2 MB, so data:
+        // URLs break long before the 10 MB export limit once CJK text is
+        // percent-encoded. Render from a temp file instead.
+        tempPath = path.join(app.getPath('temp'), `easymark-export-${process.pid}-${Date.now()}-${crypto.randomUUID()}.html`)
+        await fs.promises.writeFile(tempPath, html, 'utf8')
+        await pdfWindow.loadFile(tempPath)
+      } catch (err) {
+        console.error('Failed to load PDF content:', err)
+        finish(null, err)
+      }
+    })()
   })
 })
 

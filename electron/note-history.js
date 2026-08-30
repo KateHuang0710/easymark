@@ -4,6 +4,7 @@ const path = require('path')
 
 const VERSION_ID_PATTERN = /^(\d{13})-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.md$/i
 const DEFAULT_MAX_VERSIONS = 10
+const DEFAULT_VERSION_COALESCE_MS = 5 * 60 * 1000
 
 function historyKey(filename) {
   if (typeof filename !== 'string' || !filename) throw new Error('Invalid note filename')
@@ -115,16 +116,23 @@ async function pruneVersions(historyRoot, filename, maxBytes, maxVersions = DEFA
   return versions.slice(0, maxVersions)
 }
 
-async function createVersion(historyRoot, filename, content, maxBytes, maxVersions = DEFAULT_MAX_VERSIONS) {
+async function createVersion(historyRoot, filename, content, maxBytes, maxVersions = DEFAULT_MAX_VERSIONS, options = {}) {
   if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > maxBytes) {
     throw new Error('Invalid note version content')
   }
+  const coalesceMs = Number.isFinite(options.coalesceMs) ? Math.max(0, options.coalesceMs) : 0
 
   const existing = await listVersions(historyRoot, filename, maxBytes)
   if (existing.length > 0) {
     const latestContent = await readVersion(historyRoot, filename, existing[0].id, maxBytes)
     if (latestContent === content) return null
   }
+  // Autosave runs every few hundred milliseconds; without coalescing, a
+  // fixed-size version window only covers seconds of editing. Saves inside
+  // the interval replace the newest version instead of adding another one.
+  const superseded = coalesceMs > 0 && existing[0] && Date.now() - existing[0].createdAt < coalesceMs
+    ? existing[0]
+    : null
 
   const directory = await noteHistoryDirectory(historyRoot, filename, true)
   const timestamp = Math.max(Date.now(), (existing[0]?.createdAt || 0) + 1)
@@ -146,6 +154,11 @@ async function createVersion(historyRoot, filename, content, maxBytes, maxVersio
   }
 
   await pruneVersions(historyRoot, filename, maxBytes, maxVersions)
+  // The new snapshot already exists, so a failed cleanup only leaves an extra
+  // version behind; it must never fail the save itself.
+  if (superseded && superseded.id !== id) {
+    await fs.promises.unlink(path.join(historyRoot, historyKey(filename), superseded.id)).catch(() => {})
+  }
   const stat = await fs.promises.stat(target)
   return { id, filename, createdAt: Number(id.slice(0, 13)), size: stat.size }
 }
@@ -211,6 +224,7 @@ async function migrateHistory(historyRoot, oldFilename, newFilename, maxBytes, m
 
 module.exports = {
   DEFAULT_MAX_VERSIONS,
+  DEFAULT_VERSION_COALESCE_MS,
   createVersion,
   deleteHistory,
   historyKey,

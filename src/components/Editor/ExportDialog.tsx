@@ -15,7 +15,7 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
   const { t, locale } = useTranslation()
   const { settings } = useSettings()
   const [exporting, setExporting] = useState<'pdf' | 'docx' | null>(null)
-  const [result, setResult] = useState<{ success: boolean; path?: string } | null>(null)
+  const [result, setResult] = useState<{ success: boolean; path?: string; error?: string } | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useDialogFocus(visible, dialogRef)
   const isZh = locale === 'zh'
@@ -50,8 +50,8 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
       } else {
         setResult(null)
       }
-    } catch {
-      setResult({ success: false })
+    } catch (err) {
+      setResult({ success: false, error: err instanceof Error ? err.message : String(err) })
     }
     setExporting(null)
   }
@@ -66,8 +66,8 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
       } else {
         setResult(null)
       }
-    } catch {
-      setResult({ success: false })
+    } catch (err) {
+      setResult({ success: false, error: err instanceof Error ? err.message : String(err) })
     }
     setExporting(null)
   }
@@ -132,7 +132,7 @@ export function ExportDialog({ visible, onClose, content, title }: ExportDialogP
           <div className={`export-result ${result.success ? 'success' : 'error'}`}>
             {result.success
               ? (isZh ? `已导出到 ${result.path}` : `Saved to ${result.path}`)
-              : (isZh ? '导出失败' : 'Export failed')}
+              : (result.error || (isZh ? '导出失败' : 'Export failed'))}
           </div>
         )}
       </div>
