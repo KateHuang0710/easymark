@@ -138,6 +138,12 @@ export const zh: TranslationKeys = {
     versionSize: '{size} KB',
     loadingHistory: '正在加载历史版本…',
     close: '关闭',
+    linkDialogTitle: '插入链接',
+    linkUrl: '链接地址',
+    linkUrlPlaceholder: 'https://example.com',
+    linkUrlInvalid: '请输入有效的 http(s) 或 mailto 链接',
+    insert: '插入',
+    cancel: '取消',
   },
   welcome: {
     title: 'EasyMark',

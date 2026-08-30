@@ -134,6 +134,12 @@ export const en = {
     versionSize: '{size} KB',
     loadingHistory: 'Loading version history...',
     close: 'Close',
+    linkDialogTitle: 'Insert link',
+    linkUrl: 'Link URL',
+    linkUrlPlaceholder: 'https://example.com',
+    linkUrlInvalid: 'Enter a valid http(s) or mailto URL',
+    insert: 'Insert',
+    cancel: 'Cancel',
   },
   welcome: {
     title: 'EasyMark',

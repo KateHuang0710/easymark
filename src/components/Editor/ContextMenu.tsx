@@ -89,7 +89,7 @@ export function useEditorContextMenu(
   editorRef: React.RefObject<HTMLDivElement | null>,
   execFormat: (cmd: string, val?: string) => void,
   insertInlineCode: () => void,
-  insertLink: (url: string) => boolean,
+  openLinkDialog: () => void,
   emitChange: () => void,
   openSearch: () => void
 ) {
@@ -223,12 +223,7 @@ export function useEditorContextMenu(
         id: 'link',
         label: label(tr.editor.insertLink, 'Insert link'),
         shortcut: shortcut('Ctrl+K'),
-        action: () => {
-          const url = prompt('Enter URL:', 'https://')
-          if (url) {
-            insertLink(url)
-          }
-        },
+        action: openLinkDialog,
       },
       {
         id: 'blockquote',
@@ -266,7 +261,7 @@ export function useEditorContextMenu(
     ]
 
     setMenu({ x: e.clientX, y: e.clientY, items })
-  }, [execFormat, insertInlineCode, insertLink, emitChange, openSearch, editorRef])
+  }, [execFormat, insertInlineCode, openLinkDialog, emitChange, openSearch, editorRef])
 
   return { menu, handleContextMenu, closeMenu }
 }

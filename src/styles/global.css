@@ -2717,6 +2717,76 @@ input, textarea, button {
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
 }
+
+/* ===== Link dialog ===== */
+.link-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 20px 24px 24px;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  z-index: 1000;
+}
+.link-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+.link-dialog-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.link-dialog-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.link-dialog-input:focus {
+  border-color: var(--accent);
+}
+.link-dialog-error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  background: rgba(196, 74, 74, 0.1);
+  color: var(--danger);
+}
+.link-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.link-dialog-actions button {
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.link-dialog-actions .link-dialog-confirm {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.link-dialog-actions .link-dialog-confirm:hover {
+  background: var(--accent-hover);
+}
+
 .export-result {
   margin-top: 12px;
   padding: 8px 12px;

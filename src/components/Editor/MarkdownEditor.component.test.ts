@@ -234,4 +234,66 @@ describe('MarkdownEditor mounted component', () => {
     await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 0)) })
     expect(getContainer().querySelector('.table-visual-tools')).not.toBeNull()
   })
+
+  it('inserts a link through the link dialog instead of window.prompt', async () => {
+    const { getEditor, getContainer, changes } = await renderEditor('Body')
+    const editor = getEditor()
+    const paragraph = editor.querySelector('p')!
+    placeCaret(paragraph.firstChild!, paragraph.textContent!.length)
+
+    await click(getContainer().querySelector('button[title^="插入链接"]')!)
+    const dialog = getContainer().querySelector('.link-dialog')
+    expect(dialog).not.toBeNull()
+
+    const input = getContainer().querySelector<HTMLInputElement>('#link-dialog-url')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'https://example.com')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await click(getContainer().querySelector('.link-dialog-confirm')!)
+
+    expect(getContainer().querySelector('.link-dialog')).toBeNull()
+    expect(editor.querySelector('a[href="https://example.com/"]')).not.toBeNull()
+    expect(changes[changes.length - 1]).toContain('[link](https://example.com/)')
+  })
+
+  it('keeps the dialog open with an error when the URL is rejected', async () => {
+    const { getEditor, getContainer } = await renderEditor('Body')
+    const editor = getEditor()
+    const paragraph = editor.querySelector('p')!
+    placeCaret(paragraph.firstChild!, 0)
+
+    await click(getContainer().querySelector('button[title^="插入链接"]')!)
+    expect(getContainer().querySelector('.link-dialog')).not.toBeNull()
+
+    const input = getContainer().querySelector<HTMLInputElement>('#link-dialog-url')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, 'javascript:alert(1)')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    await click(getContainer().querySelector('.link-dialog-confirm')!)
+
+    expect(getContainer().querySelector('.link-dialog-error')).not.toBeNull()
+    expect(getContainer().querySelector('.link-dialog')).not.toBeNull()
+    expect(editor.querySelector('a')).toBeNull()
+  })
+
+  it('opens the link dialog with Ctrl/Cmd+K and closes it with Escape', async () => {
+    const { getEditor, getContainer } = await renderEditor('Body')
+    const editor = getEditor()
+
+    const openEvent = dispatchKey(editor, { key: 'k', code: 'KeyK', metaKey: true })
+    expect(openEvent.defaultPrevented).toBe(true)
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 0)) })
+    expect(getContainer().querySelector('.link-dialog')).not.toBeNull()
+
+    const input = getContainer().querySelector<HTMLInputElement>('#link-dialog-url')!
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await act(async () => { await Promise.resolve() })
+    expect(getContainer().querySelector('.link-dialog')).toBeNull()
+  })
 })

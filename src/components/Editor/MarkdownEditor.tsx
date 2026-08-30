@@ -8,6 +8,7 @@ import { ContextMenu, useEditorContextMenu } from './ContextMenu'
 import { InlineSuggestion } from './InlineSuggestion'
 import { AITransformAction, getInlineCompletion, isConfigured, transformSelection as transformAISelection } from '../../services/ai'
 import { useSettings } from '../../contexts/SettingsContext'
+import { useDialogFocus } from '../../hooks/useDialogFocus'
 import { SaveStatus } from '../../types'
 import { formatShortcut, formatShortcutLabel, isInlineCodeShortcut } from '../../utils/shortcuts'
 
@@ -1280,6 +1281,13 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
   const [tableTools, setTableTools] = useState<TableToolState | null>(null)
   const [showAITransform, setShowAITransform] = useState(false)
   const [aiTransformBusy, setAITransformBusy] = useState(false)
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false)
+  const [linkUrlDraft, setLinkUrlDraft] = useState('https://')
+  const [linkUrlError, setLinkUrlError] = useState(false)
+  const linkDialogRef = useRef<HTMLDivElement>(null)
+  const linkInputRef = useRef<HTMLInputElement>(null)
+  const linkSelectionRef = useRef<Range | null>(null)
+  useDialogFocus(linkDialogOpen, linkDialogRef, linkInputRef)
   const langPickerRef = useRef<HTMLDivElement>(null)
   const langSelectionRef = useRef<Range | null>(null)
   const langTargetRef = useRef<HTMLPreElement | null>(null)
@@ -1292,7 +1300,7 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
     'python', 'javascript', 'typescript', 'html', 'css', 'cpp', 'c',
     'java', 'go', 'rust', 'swift', 'kotlin', 'php', 'ruby',
     'sql', 'bash', 'json', 'xml', 'yaml', 'markdown', 'dockerfile',
-    'graphql', 'latex', 'powershell', 'r', 'scala', 'solidity',
+    'graphql', 'latex', 'powershell', 'r', 'scala',
   ]
 
   // Close language picker on outside click
@@ -1509,6 +1517,40 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
     return inserted
   }, [emitChange])
 
+  const openLinkDialog = useCallback(() => {
+    if (readOnly) return
+    // Chromium clears the live selection once the dialog input takes focus,
+    // so snapshot it now and restore before the link is inserted.
+    const sel = window.getSelection()
+    linkSelectionRef.current = sel && sel.rangeCount > 0 && editorRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer)
+      ? sel.getRangeAt(0).cloneRange()
+      : null
+    setLinkUrlDraft('https://')
+    setLinkUrlError(false)
+    setLinkDialogOpen(true)
+  }, [readOnly])
+
+  const closeLinkDialog = useCallback(() => {
+    setLinkDialogOpen(false)
+    linkSelectionRef.current = null
+    editorRef.current?.focus()
+  }, [])
+
+  const confirmLinkDialog = useCallback(() => {
+    if (linkSelectionRef.current) {
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(linkSelectionRef.current)
+    }
+    if (!insertLink(linkUrlDraft.trim())) {
+      setLinkUrlError(true)
+      return
+    }
+    setLinkDialogOpen(false)
+    linkSelectionRef.current = null
+    editorRef.current?.focus()
+  }, [insertLink, linkUrlDraft])
+
   const insertTable = useCallback(() => {
     if (readOnly) return
     const before = getMarkdown()
@@ -1669,7 +1711,7 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
   }, [emitChange, getMarkdown, recordProgrammaticHistory, settings.showCodeLangLabel])
 
   const { menu: ctxMenu, handleContextMenu, closeMenu } = useEditorContextMenu(
-    editorRef, execFormat, insertInlineCode, insertLink, emitChange,
+    editorRef, execFormat, insertInlineCode, openLinkDialog, emitChange,
     () => setSearchVisible(true)
   )
 
@@ -1793,8 +1835,7 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
           e.preventDefault(); execFormat('underline'); return
         case 'k':
           e.preventDefault()
-          const url = prompt('Enter URL:', 'https://')
-          if (url) insertLink(url)
+          openLinkDialog()
           return
         case '1': case '2': case '3': case '4': case '5': case '6':
           e.preventDefault()
@@ -2420,12 +2461,7 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
               <rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M9 4v16M15 4v16"/>
             </svg>
           </button>
-          <button className="editor-tb-btn" onMouseDown={e => e.preventDefault()} onClick={() => {
-            const url = prompt('Enter URL:', 'https://')
-            if (url) {
-              insertLink(url)
-            }
-          }} title={shortcutLabel(t.editor.insertLink)}>
+          <button className="editor-tb-btn" disabled={readOnly} onMouseDown={e => e.preventDefault()} onClick={openLinkDialog} title={shortcutLabel(t.editor.insertLink)}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
           <button className="editor-tb-btn" onClick={() => expandAllEditorFolds(editorRef.current)} title={t.editor.expandAllFolds}>
@@ -2611,6 +2647,45 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
       </div>
       {ctxMenu && (
         <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenu.items} onClose={closeMenu} />
+      )}
+      {linkDialogOpen && (
+        <div className="settings-overlay" onMouseDown={e => { if (e.target === e.currentTarget) closeLinkDialog() }}>
+          <div
+            ref={linkDialogRef}
+            className="link-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t.editor.linkDialogTitle}
+            tabIndex={-1}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="settings-content-header">
+              <h2>{t.editor.linkDialogTitle}</h2>
+            </div>
+            <div className="link-dialog-field">
+              <label htmlFor="link-dialog-url">{t.editor.linkUrl}</label>
+              <input
+                id="link-dialog-url"
+                ref={linkInputRef}
+                className="link-dialog-input"
+                type="text"
+                value={linkUrlDraft}
+                onChange={e => { setLinkUrlDraft(e.target.value); setLinkUrlError(false) }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); confirmLinkDialog() }
+                  else if (e.key === 'Escape') { e.stopPropagation(); closeLinkDialog() }
+                }}
+                placeholder={t.editor.linkUrlPlaceholder}
+                spellCheck={false}
+              />
+            </div>
+            {linkUrlError && <div className="link-dialog-error" role="alert">{t.editor.linkUrlInvalid}</div>}
+            <div className="link-dialog-actions">
+              <button type="button" onClick={closeLinkDialog}>{t.editor.cancel}</button>
+              <button type="button" className="link-dialog-confirm" onClick={confirmLinkDialog}>{t.editor.insert}</button>
+            </div>
+          </div>
+        </div>
       )}
       </div>
 
