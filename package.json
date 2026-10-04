@@ -107,7 +107,7 @@
   "dependencies": {
     "@types/turndown": "^5.0.4",
     "docx": "^9.7.1",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.16",
     "highlight.js": "^11.11.1",
     "marked": "^12.0.2",
     "openai": "^4.104.0",
