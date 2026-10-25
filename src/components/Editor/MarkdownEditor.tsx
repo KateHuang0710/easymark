@@ -1,5 +1,9 @@
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react'
+import DOMPurify from 'dompurify'
 import { renderMarkdown, highlightMarkdown, highlightCode } from '../../services/markdown'
+import { indentAtCaret, outdentCurrentLine } from './indentation'
+import { exitListItemToParagraph } from './list-exit'
+import { resetEditorToEmptyParagraph } from './document-reset'
 import { useTranslation } from '../../i18n'
 import TurndownService from 'turndown'
 import { SearchReplace } from './SearchReplace'
@@ -82,6 +86,15 @@ turndown.addRule('taskListItem', {
       .replace(/\n/g, `\n${' '.repeat(prefix.length)}`)
     return `${prefix}${taskContent}${node.nextSibling ? '\n' : ''}`
   },
+})
+
+turndown.addRule('emptyParagraph', {
+  // An empty paragraph is only a <br> placeholder. Turndown would serialise the
+  // <br> as two trailing spaces, leaving a whitespace-only line in the note.
+  filter: node => node.nodeName === 'P'
+    && !(node.textContent || '').trim()
+    && !node.querySelector('img,hr,pre,table,video,audio,iframe'),
+  replacement: () => '',
 })
 
 turndown.addRule('portableImage', {
@@ -1762,6 +1775,15 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
   useEffect(() => {
     if (!editorRef.current) return
     const el = editorRef.current
+    // Fast path for the per-keystroke echo: the parent is passing back the
+    // exact Markdown this editor just emitted, so the live DOM is already
+    // authoritative. getMarkdown() below is a full DOM parse + turndown pass,
+    // which would double the typing cost on large notes.
+    if (viewMode === 'edit' && !noteIdentityChanged && skipNextRender.current && content === pendingContent.current) {
+      skipNextRender.current = false
+      pendingContent.current = ''
+      return
+    }
     const currentMarkdown = getMarkdown()
     const isEchoOfCurrentEditor = contentPropChanged && currentMarkdown === content
     // Notes can legitimately have identical Markdown. Clear editor-only state
@@ -1916,7 +1938,22 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
         }
         return
       }
-      execFormat('insertText', '    ')
+      const codeBlock = closestCodeBlock(anchor ?? null)
+      if (codeBlock && editorRef.current?.contains(codeBlock)) {
+        const before = getMarkdown()
+        const changed = e.shiftKey
+          ? outdentCurrentLine(editorRef.current)
+          : indentAtCaret(editorRef.current)
+        if (changed && getMarkdown() !== before) {
+          recordProgrammaticHistory(before, getMarkdown())
+          emitChange()
+        }
+        return
+      }
+      // Tab only indents lists, tables and code blocks. Indenting a plain
+      // paragraph cannot round-trip through Markdown (Turndown escapes leading
+      // spaces to U+00A0 and four spaces would become an indented code block),
+      // so leaving the note untouched is the only lossless behaviour.
       return
     }
 
@@ -1962,8 +1999,7 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
             e.preventDefault()
             const before = getMarkdown()
             const beforeHtml = editorRef.current?.innerHTML
-            if (applyNativeEditingCommand(editorRef.current, 'outdent')) {
-              applyNativeEditingCommand(editorRef.current, 'formatBlock', 'p')
+            if (exitListItemToParagraph(editorRef.current, li as HTMLLIElement)) {
               normalizeListBlockStructure(editorRef.current)
               recordProgrammaticHistory(before, getMarkdown(), { beforeHtml, afterHtml: editorRef.current?.innerHTML })
               emitChange()
@@ -2098,14 +2134,28 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
     e.preventDefault()
     const text = e.clipboardData.getData('text/plain')
     const html = e.clipboardData.getData('text/html')
-    if (html) {
-      const temp = document.createElement('div')
-      temp.innerHTML = html
-      const plainText = temp.textContent || text
-      insertTextAtCursor(editorRef.current, plainText)
-    } else {
-      insertTextAtCursor(editorRef.current, text)
+    // Rich-text paste: sanitize the clipboard HTML and insert it as live DOM so
+    // links, emphasis, lists and tables survive the paste and serialize back to
+    // proper Markdown via the normal HTML→Markdown path. Inside code blocks (or
+    // when the clipboard only has plain text / very large HTML), fall back to
+    // plain-text insertion.
+    const selection = window.getSelection()
+    const inCodeBlock = Boolean(
+      editorRef.current
+      && selection?.rangeCount
+      && closestCodeBlock(selection.getRangeAt(0).startContainer)
+    )
+    if (html && !inCodeBlock && html.length <= 500_000) {
+      const sanitized = DOMPurify.sanitize(html, {
+        FORBID_TAGS: ['meta'],
+        FORBID_ATTR: ['style', 'class'],
+      })
+      if (sanitized && applyNativeEditingCommand(editorRef.current, 'insertHTML', sanitized)) {
+        emitChange()
+        return
+      }
     }
+    insertTextAtCursor(editorRef.current, text)
     emitChange()
   }, [emitChange])
 
@@ -2143,6 +2193,30 @@ export function MarkdownEditor({ noteId, focusRequestId = 0, content, onChange, 
       // programmatic actions that should become undoable once native edits are
       // undone first.
       programmaticHistoryRef.current.redo = []
+    }
+    // Deleting every character could leave an empty <ol>/<ul>/<blockquote>
+    // behind, so the next keystroke stayed inside the old list instead of
+    // starting a paragraph. Collapse an emptied document to one empty <p>.
+    // Deleting every character can leave an empty <ol>/<ul>/<blockquote>
+    // behind, so the next keystroke stayed inside the old list. Collapse an
+    // emptied document to a single <p>, but only when a real user deletion
+    // removed text and the remaining blocks are plain structure: inserting an
+    // empty code block also fires a delete + input pair internally.
+    const root = editorRef.current
+    const isDeletion = typeof inputType === 'string' && inputType.startsWith('delete')
+    if (isDeletion && root && (contentRef.current || '').trim()) {
+      const emptiedRoot = root
+      window.setTimeout(() => {
+        if (!emptiedRoot.isConnected || editorRef.current !== emptiedRoot) return
+        if ((emptiedRoot.textContent || '').replace(/[\s\u00a0\u200b]/g, '')) return
+        if (!emptiedRoot.querySelector('ol,ul,blockquote,h1,h2,h3,h4,h5,h6,table')) return
+        const before = getMarkdown()
+        const beforeHtml = emptiedRoot.innerHTML
+        if (resetEditorToEmptyParagraph(emptiedRoot)) {
+          recordProgrammaticHistory(before, getMarkdown(), { beforeHtml, afterHtml: emptiedRoot.innerHTML })
+          emitChange()
+        }
+      }, 0)
     }
     emitChange()
   }, [emitChange, getMarkdown])

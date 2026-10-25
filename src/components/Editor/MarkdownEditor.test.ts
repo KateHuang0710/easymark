@@ -100,6 +100,16 @@ describe('applyBlockFormat', () => {
   })
 })
 
+describe('editorHtmlToMarkdown empty paragraphs', () => {
+  it('does not leave a whitespace-only line for an empty paragraph', () => {
+    expect(editorHtmlToMarkdown('<p>first</p><p><br></p><p>second</p>')).toBe('first\n\nsecond')
+  })
+
+  it('keeps a hard line break inside a paragraph', () => {
+    expect(editorHtmlToMarkdown('<p>first<br>second</p>')).toBe('first  \nsecond')
+  })
+})
+
 describe('editorHtmlToMarkdown', () => {
   it('does not save the visual language label as code content', () => {
     const markdown = editorHtmlToMarkdown(

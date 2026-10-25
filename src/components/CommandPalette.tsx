@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NoteSummary } from '../types'
 import { useTranslation } from '../i18n'
 import { useDialogFocus } from '../hooks/useDialogFocus'
+import { formatShortcutLabel } from '../utils/shortcuts'
 
 export type AppCommand = 'new-note' | 'open-markdown' | 'search-all' | 'toggle-ai' | 'share-note' | 'export-note' | 'git-panel' | 'toggle-pin' | 'toggle-favorite'
 
@@ -16,22 +17,24 @@ interface CommandPaletteProps {
 export function CommandPalette({ visible, notes, onClose, onOpenNote, onCommand }: CommandPaletteProps) {
   const { locale } = useTranslation()
   const isZh = locale === 'zh'
+  const platform = window.electronAPI.platform
+  const shortcutLabel = useCallback((value: string) => formatShortcutLabel(value, platform), [platform])
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useDialogFocus(visible, dialogRef, inputRef)
   const commands = useMemo(() => [
-    { id: 'new-note' as const, label: isZh ? '新建笔记' : 'New note', shortcut: '⌘N' },
-    { id: 'open-markdown' as const, label: isZh ? '打开 Markdown 文件' : 'Open Markdown file', shortcut: '⌘O' },
-    { id: 'search-all' as const, label: isZh ? '搜索全部笔记' : 'Search all notes', shortcut: '⌘⇧F' },
-    { id: 'toggle-ai' as const, label: isZh ? '打开 AI 助手' : 'Open AI assistant', shortcut: '⌘⇧A' },
+    { id: 'new-note' as const, label: isZh ? '新建笔记' : 'New note', shortcut: shortcutLabel('Ctrl+N') },
+    { id: 'open-markdown' as const, label: isZh ? '打开 Markdown 文件' : 'Open Markdown file', shortcut: shortcutLabel('Ctrl+O') },
+    { id: 'search-all' as const, label: isZh ? '搜索全部笔记' : 'Search all notes', shortcut: shortcutLabel('Ctrl+Shift+F') },
+    { id: 'toggle-ai' as const, label: isZh ? '打开 AI 助手' : 'Open AI assistant', shortcut: shortcutLabel('Ctrl+Shift+A') },
     { id: 'toggle-favorite' as const, label: isZh ? '收藏/取消收藏当前笔记' : 'Toggle current favorite', shortcut: '' },
     { id: 'toggle-pin' as const, label: isZh ? '置顶/取消置顶当前笔记' : 'Toggle current pin', shortcut: '' },
-    { id: 'share-note' as const, label: isZh ? '系统分享当前笔记' : 'Share current note', shortcut: '⌘⇧E' },
+    { id: 'share-note' as const, label: isZh ? '系统分享当前笔记' : 'Share current note', shortcut: shortcutLabel('Ctrl+Shift+E') },
     { id: 'export-note' as const, label: isZh ? '导出当前笔记' : 'Export current note', shortcut: '' },
     { id: 'git-panel' as const, label: isZh ? 'Git 版本管理' : 'Git version control', shortcut: '' },
-  ], [isZh])
+  ], [isZh, shortcutLabel])
 
   const items = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase()

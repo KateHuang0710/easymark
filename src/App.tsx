@@ -296,15 +296,34 @@ function AppContent() {
         return
       }
 
-      if (!(event.ctrlKey || event.metaKey)) return
-      if (event.key.toLowerCase() === 'n') {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+      const key = event.key.toLowerCase()
+      // The renderer owns app-level commands on every platform. macOS menu
+      // items display the same accelerators with registerAccelerator disabled,
+      // so commands fired from the editor arrive here exactly once.
+      if (!event.shiftKey && key === 'o') {
         event.preventDefault()
-        setSidebarCollapsed(false)
-        setCreateRequestId(current => current + 1)
+        runAppCommandRef.current('open-markdown')
       }
-      if (event.key.toLowerCase() === 'p') {
+      if (event.shiftKey && key === 'f') {
         event.preventDefault()
-        setCommandPaletteVisible(true)
+        runAppCommandRef.current('search-all')
+      }
+      if (event.shiftKey && key === 'e') {
+        event.preventDefault()
+        runAppCommandRef.current('share-note')
+      }
+      if (event.shiftKey && key === 'a') {
+        event.preventDefault()
+        runAppCommandRef.current('toggle-ai')
+      }
+      if (!event.shiftKey && key === 'n') {
+        event.preventDefault()
+        runAppCommandRef.current('new-note')
+      }
+      if (!event.shiftKey && key === 'p') {
+        event.preventDefault()
+        runAppCommandRef.current('command-palette')
       }
     }
     window.addEventListener('keydown', handleGlobalShortcut)
@@ -345,7 +364,12 @@ function AppContent() {
     }
   }, [chooseAndImportMarkdownFile, currentNote, handleShareNote, toggleFavorite, togglePinned])
 
-  useEffect(() => window.electronAPI.onMenuCommand(runAppCommand), [runAppCommand])
+  const runAppCommandRef = useRef(runAppCommand)
+  useEffect(() => { runAppCommandRef.current = runAppCommand })
+
+  // Listener identity must not change per keystroke (runAppCommand depends on
+  // currentNote), so subscribe once and dispatch through the ref.
+  useEffect(() => window.electronAPI.onMenuCommand(command => runAppCommandRef.current(command)), [])
 
   useEffect(() => {
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file')

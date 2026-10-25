@@ -25,6 +25,7 @@ const { writeFileAtomically } = require('./atomic-file')
 const { migrateLegacyStorage } = require('./storage-migration')
 const { renameFileCaseSafely } = require('./case-rename')
 const { isDeveloperIdSigned } = require('./signing')
+const { sweepOrphanedTemporaryFiles } = require('./recovery')
 const {
   AI_CREDENTIAL_STORAGE,
   canPersistAICredential,
@@ -35,11 +36,38 @@ const { commitGit, getGitDiff, getGitHistory, getGitStatus, initializeGit } = re
 
 // E2E tests redirect these before any path below is resolved so automated
 // runs stay hermetic and never touch the real documents folder or profile.
-if (process.env.EASYMARK_DOCUMENTS_DIR) app.setPath('documents', path.resolve(process.env.EASYMARK_DOCUMENTS_DIR))
-if (process.env.EASYMARK_USER_DATA_DIR) app.setPath('userData', path.resolve(process.env.EASYMARK_USER_DATA_DIR))
+const isE2EMode = process.env.EASYMARK_E2E === '1'
+if (isE2EMode && process.env.EASYMARK_DOCUMENTS_DIR) app.setPath('documents', path.resolve(process.env.EASYMARK_DOCUMENTS_DIR))
+if (isE2EMode && process.env.EASYMARK_USER_DATA_DIR) app.setPath('userData', path.resolve(process.env.EASYMARK_USER_DATA_DIR))
+
+const KEYCHAIN_PROBE_CACHE = 'keychain-probe.json'
+
+function readCachedKeychainProbe(cacheKey) {
+  try {
+    const cached = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), KEYCHAIN_PROBE_CACHE), 'utf8'))
+    if (cached && cached.key === cacheKey && typeof cached.mockKeychain === 'boolean') return cached.mockKeychain
+  } catch { /* cache miss */ }
+  return null
+}
+
+function writeCachedKeychainProbe(cacheKey, mockKeychain) {
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true })
+    fs.writeFileSync(path.join(app.getPath('userData'), KEYCHAIN_PROBE_CACHE), JSON.stringify({ key: cacheKey, mockKeychain }))
+  } catch { /* the cache is best effort */ }
+}
 
 function shouldUseMockKeychain() {
   if (process.platform !== 'darwin') return false
+  // A binary's code signature cannot change between launches of the same
+  // file, so cache the codesign probe in userData instead of paying the
+  // synchronous (up to 2s) check on every startup.
+  let cacheKey = process.execPath
+  try {
+    cacheKey = `${process.execPath}:${fs.statSync(process.execPath).mtimeMs}`
+  } catch { /* fall back to the plain path */ }
+  const cached = readCachedKeychainProbe(cacheKey)
+  if (cached !== null) return cached
   const result = spawnSync('/usr/bin/codesign', ['-dv', '--verbose=4', process.execPath], {
     encoding: 'utf8',
     timeout: 2_000,
@@ -49,7 +77,9 @@ function shouldUseMockKeychain() {
   // prompting. Ad-hoc packaged builds and unsigned dev binaries fall back to
   // Electron's no-prompt credential backend so the app never asks for the
   // Keychain password during development or local distribution.
-  return !isDeveloperIdSigned(details)
+  const mockKeychain = !isDeveloperIdSigned(details)
+  writeCachedKeychainProbe(cacheKey, mockKeychain)
+  return mockKeychain
 }
 
 const usingMockKeychain = shouldUseMockKeychain()
@@ -402,14 +432,14 @@ function createApplicationMenu() {
     {
       label: 'File',
       submenu: [
-        { label: 'New Note', accelerator: 'CmdOrCtrl+N', click: () => mainWindow?.webContents.send('menu-command', 'new-note') },
-        { label: 'Open Markdown…', accelerator: 'CmdOrCtrl+O', click: () => mainWindow?.webContents.send('menu-command', 'open-markdown') },
+        { label: 'New Note', accelerator: 'CmdOrCtrl+N', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'new-note') },
+        { label: 'Open Markdown…', accelerator: 'CmdOrCtrl+O', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'open-markdown') },
         { type: 'separator' },
-        { label: 'Share Note…', accelerator: 'CmdOrCtrl+Shift+E', click: () => mainWindow?.webContents.send('menu-command', 'share-note') },
+        { label: 'Share Note…', accelerator: 'CmdOrCtrl+Shift+E', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'share-note') },
         { label: 'Export…', click: () => mainWindow?.webContents.send('menu-command', 'export-note') },
       ],
     },
-    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { type: 'separator' }, { label: 'Command Palette…', accelerator: 'CmdOrCtrl+P', click: () => mainWindow?.webContents.send('menu-command', 'command-palette') }, { label: 'Search All Notes…', accelerator: 'CmdOrCtrl+Shift+F', click: () => mainWindow?.webContents.send('menu-command', 'search-all') }] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }, { type: 'separator' }, { label: 'Command Palette…', accelerator: 'CmdOrCtrl+P', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'command-palette') }, { label: 'Search All Notes…', accelerator: 'CmdOrCtrl+Shift+F', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'search-all') }] },
     {
       label: 'Note',
       submenu: [
@@ -418,7 +448,7 @@ function createApplicationMenu() {
         { label: 'Git History…', click: () => mainWindow?.webContents.send('menu-command', 'git-panel') },
       ],
     },
-    { label: 'AI', submenu: [{ label: 'Open Assistant', accelerator: 'CmdOrCtrl+Shift+A', click: () => mainWindow?.webContents.send('menu-command', 'toggle-ai') }, { label: 'Ask Notes…', click: () => mainWindow?.webContents.send('menu-command', 'ask-notes') }] },
+    { label: 'AI', submenu: [{ label: 'Open Assistant', accelerator: 'CmdOrCtrl+Shift+A', registerAccelerator: false, click: () => mainWindow?.webContents.send('menu-command', 'toggle-ai') }, { label: 'Ask Notes…', click: () => mainWindow?.webContents.send('menu-command', 'ask-notes') }] },
     {
       label: 'View',
       submenu: [
@@ -535,6 +565,12 @@ app.whenReady().then(async () => {
     console.error('Failed to migrate legacy EasyMark storage:', error)
   }
   await ensureNotesDir()
+  try {
+    const removed = await sweepOrphanedTemporaryFiles(notesDir)
+    if (removed.length) console.log(`Removed ${removed.length} orphaned temporary file(s).`)
+  } catch (error) {
+    console.error('Failed to clean up orphaned temporary files:', error)
+  }
   await loadAIConfig()
 
   protocol.handle('easymark-asset', async request => {
@@ -969,9 +1005,12 @@ ipcMain.handle('share:note', async (event, rawTitle, content) => {
   await fs.promises.writeFile(filePath, content, { encoding: 'utf8', mode: 0o600 })
   setTimeout(() => fs.promises.rm(directory, { recursive: true, force: true }).catch(() => {}), 10 * 60 * 1000).unref?.()
   if (process.platform === 'darwin') {
+    // Slice by code points so an emoji or CJK extension character at the
+    // boundary is never split into a lone surrogate.
+    const shareText = Array.from(content).slice(0, 20_000).join('')
     const menu = Menu.buildFromTemplate([{
       role: 'shareMenu',
-      sharingItem: { filePaths: [filePath], texts: [content.slice(0, 20_000)] },
+      sharingItem: { filePaths: [filePath], texts: [shareText] },
     }])
     menu.popup({ window: mainWindow })
     return true

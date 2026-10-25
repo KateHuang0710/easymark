@@ -11,9 +11,14 @@ interface ReadingModeProps {
   onEdit: () => void
 }
 
-function estimateReadingTime(text: string): number {
-  const words = text.trim().split(/\s+/).length
-  return Math.max(1, Math.ceil(words / 200))
+export function estimateReadingTime(text: string): number {
+  // CJK text has no spaces, so word-splitting alone would report "1 min" for
+  // any Chinese note. Count CJK characters separately (~300/min) on top of
+  // space-delimited words (~200/min).
+  const cjkCharacters = text.match(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/g)?.length || 0
+  const latinWords = text.replace(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/g, ' ').trim().split(/\s+/).filter(Boolean).length
+  const minutes = cjkCharacters / 300 + latinWords / 200
+  return Math.max(1, Math.ceil(minutes))
 }
 
 export function ReadingMode({ content, title, onClose, onEdit }: ReadingModeProps) {

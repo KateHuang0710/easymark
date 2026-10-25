@@ -37,6 +37,24 @@ interface SettingsContextType {
 
 const STORAGE_KEY = 'easymark-settings'
 
+// True while a legacy renderer-held API key is still being handed over to the
+// main process. While set, settings saves keep the key in localStorage: if the
+// renderer dies before the main process confirms secure storage, the key must
+// still exist somewhere durable for the next launch to retry.
+let legacyKeyMigrationInFlight = false
+
+function saveSettings(s: Settings) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      ...s,
+      dualPane: false, // runtime-only state; loadSettings ignores the stored value
+      ai: legacyKeyMigrationInFlight ? s.ai : { ...s.ai, apiKey: '' },
+    }))
+  } catch (error) {
+    console.error('Failed to persist settings:', error)
+  }
+}
+
 const VALID_SCHEMES: ColorScheme[] = ['forest', 'ocean', 'terracotta', 'monochrome']
 
 function loadSettings(): Settings {
@@ -74,17 +92,6 @@ function loadSettings(): Settings {
   }
 }
 
-function saveSettings(s: Settings) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ...s,
-      ai: { ...s.ai, apiKey: '' },
-    }))
-  } catch (error) {
-    console.error('Failed to persist settings:', error)
-  }
-}
-
 const SettingsContext = createContext<SettingsContextType | null>(null)
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
@@ -105,18 +112,27 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true
     const legacyKey = settings.ai.apiKey.trim()
+    legacyKeyMigrationInFlight = Boolean(legacyKey)
+    // Re-persist once with the guard active: the settings-save effect above
+    // has already run this mount and wiped the key from localStorage.
+    if (legacyKey) saveSettings(settings)
     const initialize = legacyKey
       ? configureAI(legacyKey, settings.ai.apiUrl, settings.ai.model)
       : initializeAI()
     void initialize.then(config => {
       if (!active) return
+      legacyKeyMigrationInFlight = false
       setAiEnabled(config.configured)
       setAiCredentialStorage(config.credentialStorage || (config.persistedSecurely === false ? 'session' : 'secure'))
       setSettings(prev => ({
         ...prev,
         ai: { apiKey: '', apiUrl: config.apiUrl, model: config.model },
       }))
-    }).catch(error => console.error('Failed to initialize AI configuration:', error))
+    }).catch(error => {
+      // Keep the key persisted (flag stays true) so the next launch retries
+      // the migration instead of silently losing the credential.
+      console.error('Failed to initialize AI configuration:', error)
+    })
     return () => { active = false }
     // AI credentials are loaded once from the main process; settings changes are
     // explicitly applied by SettingsDialog.

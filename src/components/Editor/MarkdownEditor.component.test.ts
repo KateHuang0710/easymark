@@ -296,4 +296,85 @@ describe('MarkdownEditor mounted component', () => {
     await act(async () => { await Promise.resolve() })
     expect(getContainer().querySelector('.link-dialog')).toBeNull()
   })
+
+  function dispatchPaste(target: HTMLElement, payload: { html?: string; text?: string }) {
+    const clipboardData = {
+      items: [],
+      getData: (type: string) => (type === 'text/html' ? payload.html || '' : payload.text || ''),
+    }
+    const event = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData })
+    target.dispatchEvent(event)
+    return event
+  }
+
+  function installInsertHtmlStub() {
+    const execCommand = vi.fn((command: string, _ui: boolean, value?: string) => {
+      if (command !== 'insertHTML') return false
+      const selection = window.getSelection()
+      if (!selection?.rangeCount) return false
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      const fragment = range.createContextualFragment(String(value))
+      range.insertNode(fragment)
+      return true
+    })
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand })
+    return execCommand
+  }
+
+  it('pastes sanitized clipboard HTML as live formatting and emits Markdown', async () => {
+    const { getEditor, changes } = await renderEditor('Body')
+    const editor = getEditor()
+    const paragraph = editor.querySelector('p')!
+    placeCaret(paragraph.firstChild!, paragraph.textContent!.length)
+    const execCommand = installInsertHtmlStub()
+
+    await act(async () => {
+      dispatchPaste(editor, {
+        html: '<b>bold</b> <a href="https://example.com">link</a><script>alert(1)</script>',
+        text: 'bold link',
+      })
+      await Promise.resolve()
+    })
+
+    expect(execCommand).toHaveBeenCalledWith('insertHTML', false, expect.not.stringContaining('<script'))
+    expect(editor.querySelector('b')?.textContent).toBe('bold')
+    expect(editor.querySelector('a[href="https://example.com"]')).not.toBeNull()
+    expect(changes[changes.length - 1]).toContain('**bold**')
+    expect(changes[changes.length - 1]).toContain('[link](https://example.com)')
+  })
+
+  it('pastes as plain text inside code blocks', async () => {
+    const { getEditor, changes } = await renderEditor('Body\n\n```\ncode line\n```\n')
+    const editor = getEditor()
+    const codeText = editor.querySelector('pre code')!.firstChild!
+    placeCaret(codeText, codeText.textContent!.length)
+    const execCommand = installInsertHtmlStub()
+
+    await act(async () => {
+      dispatchPaste(editor, { html: '<b>not formatted</b>', text: 'not formatted' })
+      await Promise.resolve()
+    })
+
+    expect(execCommand).not.toHaveBeenCalledWith('insertHTML', expect.anything(), expect.anything())
+    expect(editor.querySelector('b')).toBeNull()
+    expect(changes[changes.length - 1]).toContain('not formatted')
+  })
+
+  it('falls back to plain text when the clipboard has no HTML', async () => {
+    const { getEditor, changes } = await renderEditor('Body')
+    const editor = getEditor()
+    const paragraph = editor.querySelector('p')!
+    placeCaret(paragraph.firstChild!, paragraph.textContent!.length)
+    const execCommand = installInsertHtmlStub()
+
+    await act(async () => {
+      dispatchPaste(editor, { text: 'plain insert' })
+      await Promise.resolve()
+    })
+
+    expect(execCommand).not.toHaveBeenCalledWith('insertHTML', expect.anything(), expect.anything())
+    expect(changes[changes.length - 1]).toContain('plain insert')
+  })
 })
