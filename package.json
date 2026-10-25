@@ -102,7 +102,7 @@
     "electron-builder": "^26.15.3",
     "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
-    "vite": "^8.1.5",
+    "vite": "^8.3.5",
     "vitest": "^4.1.10",
     "wait-on": "^7.2.0"
   },
