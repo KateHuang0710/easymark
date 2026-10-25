@@ -22,6 +22,7 @@ async function launchApp() {
     args: ['.', '--disable-gpu'],
     env: {
       ...process.env,
+      EASYMARK_E2E: '1',
       EASYMARK_DOCUMENTS_DIR: docsDir,
       EASYMARK_USER_DATA_DIR: userDataDir,
     },
@@ -124,4 +125,53 @@ test('Escape closes only the top-most stacked surface', async () => {
 
   await window.keyboard.press('Escape')
   await expect(window.locator('.ai-panel')).toHaveCount(0)
+})
+
+async function openComparison() {
+  await window.click('.editor-toolbar-end button[title="与其他笔记对比"], .editor-toolbar-end button[title="Compare with another note"]')
+  await window.waitForSelector('.dual-pane')
+}
+
+test('tab and shift+tab never rewrite a plain paragraph', async () => {
+  await createNote('Indent Note')
+  await typeInEditor('body text')
+  await window.keyboard.press(`${modifier}+s`)
+  await expectFileContains('Indent Note', 'body text')
+
+  // Indenting a paragraph cannot round-trip through Markdown: four spaces turn
+  // it into an indented code block and Turndown escapes leading spaces to
+  // U+00A0. Both directions must therefore leave the note untouched.
+  await window.keyboard.press('End')
+  await window.keyboard.press('Home')
+  await window.keyboard.press('Tab')
+  await window.keyboard.press('Shift+Tab')
+  await window.keyboard.press(`${modifier}+s`)
+  await new Promise(resolve => setTimeout(resolve, 800))
+  expect(await fs.readFile(notePath('Indent Note'), 'utf8')).toBe('body text')
+})
+
+test('swapping comparison panes preserves notes that contain a code block', async () => {
+  await createNote('Swap Block')
+  await typeInEditor('intro paragraph')
+  await window.click('button[title^="代码块"], button[title^="Code block"]')
+  await window.keyboard.type('const value = 1')
+  await window.keyboard.press(`${modifier}+s`)
+  await expectFileContains('Swap Block', 'const value = 1')
+
+  await createNote('Swap Plain')
+  await typeInEditor('plain body')
+  await window.keyboard.press(`${modifier}+s`)
+  await expectFileContains('Swap Plain', 'plain body')
+
+  const blockBefore = await fs.readFile(notePath('Swap Block'), 'utf8')
+  const plainBefore = await fs.readFile(notePath('Swap Plain'), 'utf8')
+
+  await openComparison()
+  await window.click('button[title="交换两侧笔记"], button[title="Swap panes"]')
+  await window.keyboard.press('Shift+Tab')
+  await window.keyboard.press(`${modifier}+s`)
+  await new Promise(resolve => setTimeout(resolve, 1000))
+
+  expect(await fs.readFile(notePath('Swap Block'), 'utf8')).toBe(blockBefore)
+  expect(await fs.readFile(notePath('Swap Plain'), 'utf8')).toBe(plainBefore)
 })

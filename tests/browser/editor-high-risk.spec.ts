@@ -189,6 +189,51 @@ test('exits an empty ordered-list item with Enter and continues in body text', a
   await expect(page.locator('#markdown-output')).toContainText('after list')
 })
 
+test('select-all delete leaves an empty paragraph instead of an empty list', async ({ page }) => {
+  const editor = page.locator('.editor-wysiwyg')
+  await selectContents(page, '.editor-wysiwyg p')
+  await page.getByTitle(/有序列表/).click()
+  await editor.locator('ol > li').first().click()
+  await page.keyboard.type('item text')
+
+  await editor.locator('ol > li').first().click()
+  await page.keyboard.press(`${primary}+a`)
+  await page.keyboard.press('Delete')
+
+  await expect(editor.locator('ol, ul')).toHaveCount(0)
+  await page.keyboard.type('fresh paragraph')
+  await expect(editor.locator('p').last()).toContainText('fresh paragraph')
+})
+
+test('exits a nested empty ordered-list item into body text', async ({ page }) => {
+  const editor = page.locator('.editor-wysiwyg')
+  await selectContents(page, '.editor-wysiwyg p')
+  await page.getByTitle(/有序列表/).click()
+
+  // Build "1. alpha" with a nested item underneath it.
+  const firstItem = editor.locator('ol > li').first()
+  await firstItem.click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('alpha')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('beta')
+  await page.keyboard.press('Tab')
+  await expect(editor.locator('> ol > li > ol > li')).toHaveCount(1)
+
+  // Enter twice on the empty nested item must leave the whole list, not
+  // continue the outer list with the following prose.
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('after list')
+
+  // The outer list keeps alpha, the nested list keeps beta, and the prose
+  // lands in a paragraph after the list instead of becoming a new list item.
+  await expect(editor.locator('> ol > li > ol > li')).toHaveCount(1)
+  await expect(editor.locator('> ol > li')).toHaveCount(1)
+  await expect(editor.locator('> ol ~ p, > p').last()).toContainText('after list')
+  await expect(page.locator('#markdown-output')).not.toContainText('2.  after list')
+})
+
 test('turns an empty list item into an editable paragraph with Backspace', async ({ page }) => {
   const editor = page.locator('.editor-wysiwyg')
   await selectContents(page, '.editor-wysiwyg p')
@@ -272,6 +317,19 @@ test('undoes and redoes ordered-list formatting without invalid paragraph nestin
   await page.keyboard.press(`${primary}+Y`)
   await expect(editor.locator(':scope > ol > li')).toHaveText('Body')
   await expect(editor.locator('p > ol, p > ul')).toHaveCount(0)
+})
+
+test('indents a line inside a code block with Tab', async ({ page }) => {
+  const editor = page.locator('.editor-wysiwyg')
+  await selectContents(page, '.editor-wysiwyg p')
+  await page.getByTitle(/代码块 \/ 在代码块内点击可退出/).click()
+  const pre = editor.locator('pre').first()
+  await expect(pre).toHaveCount(1)
+
+  await pre.click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Tab')
+  await expect(page.locator('#markdown-output')).toContainText('    Body')
 })
 
 test('keeps nested ordered-list indentation valid through Tab and Shift+Tab', async ({ page }) => {
