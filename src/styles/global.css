@@ -553,35 +553,6 @@ input, textarea, button {
   color: var(--text-tertiary);
 }
 
-.sidebar-note-markers {
-  display: flex;
-  align-items: center;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.sidebar-note:hover .sidebar-note-markers,
-.sidebar-note:focus-within .sidebar-note-markers {
-  opacity: 1;
-}
-
-.sidebar-note:has(.sidebar-note-marker.active) .sidebar-note-markers { opacity: 1; }
-
-.sidebar-note-marker {
-  width: 22px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
-}
-
-.sidebar-note-marker.active {
-  color: var(--accent);
-  opacity: 1;
-}
-
 .sidebar-rename-input {
   width: 100%;
   height: 28px;
@@ -592,29 +563,6 @@ input, textarea, button {
   color: var(--text-primary);
   font-size: 13px;
   outline: none;
-}
-
-.sidebar-note-delete {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-.sidebar-note:hover .sidebar-note-delete {
-  opacity: 1;
-}
-.sidebar-note-delete:hover {
-  background: rgba(196, 74, 74, 0.12);
-  color: var(--danger);
 }
 
 .sidebar-footer {
@@ -1366,12 +1314,6 @@ input, textarea, button {
 }
 
 /* ===== Markdown Content Styling (Typora inspired) ===== */
-.editor-content {
-  font-size: 15px;
-  line-height: 1.75;
-  color: var(--text-primary);
-}
-
 .editor-content h1 {
   font-size: 1.8em;
   font-weight: 700;
@@ -1819,73 +1761,9 @@ input, textarea, button {
   font-size: 14px;
 }
 
-.ai-setup-btn {
-  padding: 8px 20px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.ai-setup-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-/* AI Settings */
-.ai-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.ai-settings h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.ai-settings-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ai-settings-field label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.ai-input {
-  width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.ai-input:focus {
-  border-color: var(--accent);
-}
-.ai-input::placeholder {
-  color: var(--text-tertiary);
-}
-
 .ai-hint {
   font-size: 11px;
   color: var(--text-tertiary);
-}
-
-.ai-settings-actions {
-  display: flex;
-  gap: 8px;
 }
 
 .ai-btn {
@@ -1916,30 +1794,6 @@ input, textarea, button {
 .ai-btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-}
-.ai-btn-secondary {
-  background: transparent;
-  color: var(--danger);
-  border-color: var(--danger);
-}
-.ai-btn-secondary:hover {
-  background: rgba(196, 74, 74, 0.08);
-}
-
-.ai-connected {
-  color: #4CAF50;
-  font-size: 12px;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.ai-connected::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #4CAF50;
 }
 
 /* AI Complete Tab */
@@ -2414,22 +2268,6 @@ input, textarea, button {
   color: var(--text-tertiary);
 }
 
-.settings-select {
-  width: 100%;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-}
-.settings-select:focus {
-  border-color: var(--accent);
-}
-
 .settings-model-header {
   display: flex;
   align-items: center;
@@ -2522,12 +2360,6 @@ input, textarea, button {
 .settings-about p {
   font-size: 14px;
   color: var(--text-secondary);
-}
-
-.settings-about-sub {
-  font-size: 12px;
-  color: var(--text-tertiary) !important;
-  margin-top: 4px;
 }
 
 .settings-help-btn {

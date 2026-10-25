@@ -239,16 +239,6 @@ select:focus-visible {
   letter-spacing: 0.1px;
 }
 
-.sidebar-note-delete {
-  width: 26px;
-  height: 26px;
-  border: 1px solid transparent;
-}
-
-.sidebar-note:hover .sidebar-note-delete {
-  opacity: 0.72;
-}
-
 .sidebar-footer {
   padding: 11px 14px;
   background: color-mix(in srgb, var(--bg-toolbar) 46%, transparent);
@@ -507,16 +497,14 @@ select:focus-visible {
 
 .ai-textarea,
 .ai-chat-input,
-.settings-input,
-.settings-select {
+.settings-input {
   border-radius: 10px;
   transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
 .ai-textarea:focus,
 .ai-chat-input:focus,
-.settings-input:focus,
-.settings-select:focus {
+.settings-input:focus {
   background: var(--bg-surface);
   box-shadow: var(--focus-ring);
 }
